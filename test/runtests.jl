@@ -9,6 +9,7 @@ solvers = [
     ODE.ode23,
 
     ODE.ode4,
+    ODE.ode4_v2,
     ODE.ode45_dp,
     ODE.ode45_fb,
     ODE.ode45_ck,

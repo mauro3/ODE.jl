@@ -563,4 +563,6 @@ end
 # Use order 4 by default
 ode4ms(F, x0, tspan) = ode_ms(F, x0, tspan, 4)
 
+include("runge_kutta.jl")
+
 end # module ODE
