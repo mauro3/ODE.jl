@@ -9,13 +9,14 @@ solvers = [
     ODE.ode23,
 
     ODE.ode4,
-    ODE.ode4_v2,
     ODE.ode45_dp,
     ODE.ode45_fb,
     ODE.ode45_ck,
-
-           ODE.ode45_v2,
-               ODE.ode78_v2,
+#new:
+    ODE.ode4_v2,
+    ODE.ode45_v2,
+    ODE.ode54_v2,
+    #ODE.ode78_v2,
            
     ODE.ode23s,
 

@@ -109,7 +109,7 @@ bt_dopri5 = TableauExplicit(:dopri, (5,4), Float64,
                       19372//6561     -25360//2187     64448//6561     -212//729 0 0 0
                       9017//3168     -355//33     46732//5247     49//176     -5103//18656 0 0
                       35//384     0     500//1113     125//192     -2187//6784     11//84  0],
-                     [35//384     0     500//1113     125//192     -2187//6784     11//84     0
+                     [35//384         0      500//1113      125//192      -2187//6784         11//84      0
                       5179//57600     0     7571//16695     393//640     -92097//339200     187//2100     1//40],
                      [0, 1//5, 3//10, 4//5, 8//9, 1, 1]
                      )
@@ -119,20 +119,20 @@ bt_dopri5 = TableauExplicit(:dopri, (5,4), Float64,
 # National Aeronautics and Space Administration.
 bt_feh78 = TableauExplicit(:feh78, (7,8), Float64,
                             [     0      0      0       0        0         0       0       0     0      0    0 0 0
-                                  2/27   0      0       0        0         0       0       0     0      0    0 0 0
-                                  1/36   1/12   0       0        0         0       0       0     0      0    0 0 0
-                                  1/24   0      1/8     0        0         0       0       0     0      0    0 0 0
-                                  5/12   0    -25/16   25/16     0         0       0       0     0      0    0 0 0
-                                  1/20   0      0       1/4      1/5       0       0       0     0      0    0 0 0
-                                -25/108  0      0     125/108  -65/27    125/54    0       0     0      0    0 0 0
-                                 31/300  0      0       0       61/225    -2/9    13/900   0     0      0    0 0 0
-                                  2      0      0     -53/6    704/45   -107/9    67/90    3     0      0    0 0 0
-                                -91/108  0      0      23/108 -976/135   311/54  -19/60   17/6  -1/12   0    0 0 0
-                               2383/4100 0      0    -341/164 4496/1025 -301/82 2133/4100 45/82 45/164 18/41 0 0 0
-                                  3/205  0      0       0        0        -6/41   -3/205  -3/41  3/41   6/41 0 0 0
-                              -1777/4100 0      0    -341/164 4496/1025 -289/82 2193/4100 51/82 33/164 12/41 0 1 0],
-                            [41/840 0 0 0 0 34/105 9/35 9/35 9/280 9/280 41/840 0 0
-                             0 0 0 0 0 34/105 9/35 9/35 9/280 9/280 0 41/840 41/840],
+                                  2//27   0      0       0        0         0       0       0     0      0    0 0 0
+                                  1//36   1//12   0       0        0         0       0       0     0      0    0 0 0
+                                  1//24   0      1//8     0        0         0       0       0     0      0    0 0 0
+                                  5//12   0    -25//16   25//16     0         0       0       0     0      0    0 0 0
+                                  1//20   0      0       1//4      1//5       0       0       0     0      0    0 0 0
+                                -25//108  0      0     125//108  -65//27    125//54    0       0     0      0    0 0 0
+                                 31//300  0      0       0       61//225    -2//9    13//900   0     0      0    0 0 0
+                                  2      0      0     -53//6    704//45   -107//9    67//90    3     0      0    0 0 0
+                                -91//108  0      0      23//108 -976//135   311//54  -19//60   17//6  -1//12   0    0 0 0
+                               2383//4100 0      0    -341//164 4496//1025 -301//82 2133//4100 45//82 45//164 18//41 0 0 0
+                                  3//205  0      0       0        0        -6//41   -3//205  -3//41  3//41   6//41 0 0 0
+                              -1777//4100 0      0    -341//164 4496//1025 -289//82 2193//4100 51//82 33//164 12//41 0 1 0],
+                              [41//840 0 0 0 0 34//105 9//35 9//35 9//280 9//280 41//840 0 0
+                               0 0 0 0 0 34//105 9//35 9//35 9//280 9//280 0 41//840 41//840],
                              [0//1, 2//27, 1//9 , 1//6 , 5//12, 1//2 , 5//6 , 1//6 , 2//3 , 1//3 , 1//1 , 0//1 , 1//1]
                             )
 
@@ -142,7 +142,15 @@ bt_feh78 = TableauExplicit(:feh78, (7,8), Float64,
 export oderk_fixed, oderk_adapt
 
 # to put ys into the vector of vector format:
-transformys{T}(ys::Array{T}) = size(ys,1)==1 ? squeeze(ys,1) : Vector{T}[ys[:,i] for i=1:size(ys,2)]
+function transformys{T}(ys::Array{T})
+    if size(ys,1)==1
+        squeeze(ys,1)
+    elseif length(size(ys))!=1
+        Vector{T}[ys[:,i] for i=1:size(ys,2)]
+    else
+        ys
+    end
+end
 
 # Fixed step Runge-Kutta method
 # TODO: iterator method
@@ -152,10 +160,11 @@ function oderk_fixed{N,S,T}(fn, y0, tspan::AbstractVector,
     tsteps = length(tspan)
     ys = Array(T, dof, tsteps)
     ys[:,1] = y0'
-    tspan = convert(Vector{T}, tspan) # this will destroy ranges
-    # work arrays
+    tspan = convert(Vector{T}, tspan)
+    # work arrays:
     ks = zeros(T, dof, S)
     ytmp = zeros(T, dof)
+    # time stepping:
     for i=1:length(tspan)-1
         dt = tspan[i+1]-tspan[i]
         ys[:,i+1] = ys[:,i]
@@ -171,13 +180,19 @@ function oderk_fixed{N,S,T}(fn, y0, tspan::AbstractVector,
 end
 # calculates k[s]
 function calc_next_k!{N,S,T}(ks::Matrix, ytmp::Vector, s, fn, t, dt, dof, btab::TableauExplicit{N,S,T})
-    # ytmp needs to be set to the current y
-    for ss=2:s
+    # Calculates the next ks and puts it into ks[
+    # - ytmp needs to be set to the current y on entry.
+    #
+    # - ks and ytmp are modified inside this function.
+    #
+    # TODO: allow reuse as in Dormand-Price
+    # TODO: calculate all k in one go
+    for ss=1:s-1
         for d=1:dof
             ytmp[d] += dt * ks[d,ss] * btab.a[s,ss]
         end
     end
-    ks[:,s] = fn(t + btab.c[s]*dt, ytmp)
+    ks[:,s] = fn(t + btab.c[s]*dt, ytmp) # TODO update k to be vector of vector k[s][:] = ...
     nothing
 end
 
@@ -192,7 +207,7 @@ function oderk_adapt{N,S,T}(fn, y0, tspan, btab::TableauExplicit{N,S,T};
                      reltol = 1.0e-5, abstol = 1.0e-8,
                      norm=Base.norm,
                      minstep=abs(tspan[end] - tspan[1])/1e9,
-                     maxstep=abs(tspan[end] - tspan[1])/2.5, # TODO
+                     maxstep=abs(tspan[end] - tspan[1])/2.5,
                      initstep=0.)
 
     !isadaptive(btab) && error("Can only use this solver with an adpative Butcher table")
@@ -200,6 +215,7 @@ function oderk_adapt{N,S,T}(fn, y0, tspan, btab::TableauExplicit{N,S,T};
     # TODO: fix magic numbers
     const large = 1.0e5
     const facmax = 1.0e5
+    order = minimum(btab.order)
 
     ## Initialization
     dof = length(y0)
@@ -221,66 +237,109 @@ function oderk_adapt{N,S,T}(fn, y0, tspan, btab::TableauExplicit{N,S,T};
         ys = zeros(T, dof)
         ys[:] = y0
         y0 = ys[:] # now of right type
-        sizehint_size = 100 # TODO check this makes a difference
         tspan = [tstart]
+        # TODO check this makes a difference:
+        sizehint_size = 100
         sizehint(tspan, sizehint_size)
         sizehint(ys, sizehint_size)
     end
+    # work arrays:
     yold   = copy(y0)
     ytrial = zeros(T, dof)
     yerr   = zeros(T, dof)
-    ks     = zeros(T, dof, S) # work array
-    ytmp   = zeros(T, dof)    # work array
+    ks     = zeros(T, dof, S) 
+    ytmp   = zeros(T, dof)
 
     # Should it be maximum(order(btab)) or minimum(order(btab)):
-    dt, f0 = hinit(fn, y0, tstart, tend-tstart, maximum(order(btab)), reltol, abstol)
-    
-    # dts = Float64[]
-    # xerrs = Float64[]
+    tdir = sign(tend-tstart)
+    dt, f0 = hinit(fn, y0, tstart, tdir, order, reltol, abstol)
+    dts = Float64[]
+    errs = Float64[]
     iter = 1
     steps = [0,0]  # [accepted, rejected]
 
-    while t<tend
-        rkstep_embedded!(ytrial, ytmp, yerr, ks, yold, t, dt, fn, dof, btab)
-        newdt = stepsize_hw(dt, yold, ytrial, yerr,
-                            abstol, reltol, order(btab), facmax, dof,
-                            maxstep)
+    while tdir*t < tdir*tend
+        println(" ")
+        # do a step
+        ytrial[:] = 0
+        yerr[:] = 0
+        for s=1:S
+            ytmp[:] = yold # needed for calc_next_k!
+            calc_next_k!(ks, ytmp, s, fn, t, dt, dof, btab)
+            for d=1:dof
+                ytrial[d] += btab.b[1,s]*ks[d,s]
+                yerr[d]   += btab.b[2,s]*ks[d,s]
+            end
+        end
+        for d=1:dof
+            yerr[d]   = dt * (ytrial[d]-yerr[d])
+            ytrial[d] = yold[d] + dt * ytrial[d]
+        end
 
-        if newdt>=dt # accept step as new dt is larger than old one
+
+        #########
+#            dt = diff(tspan)[1]
+
+#         iter += 1
+
+#                     ys[:,iter]= ytrial
+
+#             tmp = yold
+#             yold = ytrial
+#             ytrial = tmp
+
+#             # update t
+#             t += dt
+#              if abs(tend-t-dt)<0.05*dt #tdir*(t+dt) > tdir*(tend + dt*0.01)
+#                  @show                dt = tend-t + eps(tend)
+#             end
+#             steps[1] +=1 
+# continue
+        ############
+        # find a new step size:
+        err, newdt = stepsize_ODE(dt, tdir, yold, ytrial, yerr,
+                                   abstol, reltol, order, facmax, dof,
+                                   maxstep)
+        @show err
+        if err<=1.
+            @show "inc", newdt-dt, dt
             steps[1] +=1 
             if tstepsgiven
                 # interpolate onto given output points
-                f0 = squeeze(ks[:,1],2)
+                f0 = ks[:,1]
                 f1 = fn(t+dt, ytrial)
                 while iter<ntspan && tspan[iter+1]<=t+dt  # output at all new times which are ≤ t+dt
                     iter += 1
                     ys[:,iter] = hermite_interp(tspan[iter], t, dt, yold, ytrial, f0, f1)
                 end
+            else
+                # output every step
+                append!(ys, ytrial)
+                push!(tspan, t+dt)
             end
 
             # Swap bindings of yold and ytrial, avoids one copy
             tmp = yold
             yold = ytrial
             ytrial = tmp
+
+            # update t
             t += dt
             dt = newdt
-            # hit end point exactly:
-            if (t+dt) > (tend + dt*0.01)
-                dt = tend-t
+            # hit end point exactly if close:
+            if abs(tend-(t+dt))/dt < 0.05
+                dt = tend-t + eps(tend) # eps to make sure while loop terminates after next iteration
             end
-            # push!(dts, dt)
-            # append!(xerrs, yerr)
-
-            if !tstepsgiven
-                append!(ys, ytrial)
-                push!(tspan, t)
-            end
-            facmax = large
-        elseif dt<minstep  # minimum step size reached
-            @show length(ys), t, dt
-            error("dt < minstep")
             
+            push!(dts, dt)
+            push!(errs, err)
+            facmax = large
+        elseif abs(dt)<minstep  # minimum step size reached
+            @show length(ys), t, dt
+            println("Warning: dt < minstep.  Stopping.")
+            break
         else # redo step with smaller dt
+            @show "dec", newdt-dt, dt
             steps[2] +=1 
             dt = newdt
             facmax = 1.0 # forbids dt increases in the next step
@@ -291,6 +350,8 @@ function oderk_adapt{N,S,T}(fn, y0, tspan, btab::TableauExplicit{N,S,T};
         ys = reshape(ys, dof, ntspan)
     end
     #    xerrs = reshape(xerrs, dof, length(dts))
+    @show steps
+    @show errs
     return tspan, transformys(ys)
 end
 ode45_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_rk45, kwargs...)
@@ -298,70 +359,61 @@ ode54_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_dopri5, kwarg
 ode78_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_feh78, kwargs...)
 
 # Helper functions:
-
-# Does an explicit RK step with an embedded method
-function rkstep_embedded!{N,S,T}(ytrial, ytmp, yerr, ks, yold, t, dt, fn, dof, btab::TableauExplicit{N,S,T})
-    # updates ytrial, ytmp, yerr, ks and f0 in-place.  
-    ytrial[:] = 0
-    yerr[:] = 0
-    for s=1:S
-        ytmp[:] = yold
-        calc_next_k!(ks, ytmp, s, fn, t, dt, dof, btab)
-        for d=1:dof
-            ytrial[d] += btab.b[1,s]*ks[d,s]
-            yerr[d]   += btab.b[2,s]*ks[d,s]
-        end
-    end
-    for d=1:dof
-        yerr[d]   = dt * (ytrial[d]-yerr[d])
-        ytrial[d] = dt * ytrial[d] + yold[d]
-    end
-    nothing
-end
-
-function stepsize_hw(dt, x0, xtrial, xerr, abstol, reltol, order,
+function stepsize_hw92(dt, tdir, x0, xtrial, xerr, abstol, reltol, order,
                      facmax, dof, maxstep)
     # Estimates new best step size following
-    # Hairer & al 1992, p167 (with some modifications)
-    order = minimum(order)
+    # Hairer & Wanner 1992, p167 (with some modifications)
     
     # TODO: parameters to lift out of this function 
-    fac = [0.8, 0.9, 0.25^(1/(order+1)), 0.38^(1/(order+1))][1]
+    fac = [0.8, 0.9, 0.25^(1/(order+1)), 0.38^(1/(order+1))][2]
     facmax_def = 2.0 # maximal step size increase. 1.5-5
     facmax = min(facmax_def, facmax)
     facmin = 1./facmax_def  # maximal step size decrease. ?
     
     # figure out a new step size
     tol = abstol + max(abs(x0), abs(xtrial)).*reltol # 4.10
-    err = sqrt(1/dof * sum((xerr./tol).^2) )     # 4.11
-#        err = maximum(abs(xerr./sc))
+    #   err = sqrt(1/dof * sum((xerr./tol).^2) )     # 4.11
+    err = norm(xerr./tol,Inf )     # 4.11
 
     newdt = dt * min(facmax, max(facmin, fac*(1/err)^(1/(order+1))))
-    return min(newdt, maxstep)
+    return err, min(newdt, maxstep) # this doesn't work with negative steps!
 end
 
-function stepsize_wh96(dt, x0, xtrial, xerr, abstol, reltol, order, facmax, dof)
+function stepsize_wh96(dt, tdir, x0, xtrial, xerr, abstol, reltol, order,
+                       facmax, dof, maxstep)
     # Estimates new best step size following
     # Wanner & Hairer 1996, p.112 (with some modifications)
 
     # TODO: lift parameters out of here:
-    c1 = 6.
-    c2 = 0.2 
-    c3 = 0.9
+    c1 = min(facmax, 6.)  # max step size increase
+    c2 = 0.2 # max step size decrease
+    c3 = 0.8 # safety factor, lower==saver
     
     if any(isnan(xtrial))
         # reduce step size by max if solution contains NaN
         return dt*c2
     end
 
-    order = minimum(order)
     
     tol = abstol + max(abs(x0), abs(xtrial)).*reltol
     err = maximum(abs(xerr./tol))
     # e = 0.9*(1/err)^(1/(order+1))
     # @show e
                      
-    return dt * min(c1, max(c2, c3*(1/err)^(1/(order+1))) )
+    return err, min( dt * min(c1, max(c2, c3*(1/err)^(1/(order+1))) ), maxstep)
+end
+
+function stepsize_ODE(dt, tdir, x0, xtrial, xerr, abstol, reltol, order,
+                      facmax, dof, maxstep)
+    # estimate the local truncation error
+    gamma1 = xerr
+    
+    # Estimate the error and the acceptable error
+    delta = norm(gamma1, Inf)              # actual error
+    tau   = max(reltol*norm(x0,Inf),abstol) # allowable error
+    err = delta/tau
+    newdt = tdir*min(maxstep, 0.8*abs(dt)*(1/err)^(1/(order+1)))
+    return err, newdt
 end
 
 # For dense output see Hairer & Wanner p.190 using Hermite interpolation

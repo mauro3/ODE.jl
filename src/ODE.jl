@@ -25,6 +25,7 @@ export ode4s, ode4ms, ode4
 # estimator for initial step based on book
 # "Solving Ordinary Differential Equations I" by Hairer et al., p.169
 function hinit(F, x0, t0, tdir, p, reltol, abstol)
+    tdir==0 && error("Zero time span")
     tau = max(reltol*norm(x0, Inf), abstol)
     d0 = norm(x0, Inf)/tau
     f0 = F(t0, x0)
