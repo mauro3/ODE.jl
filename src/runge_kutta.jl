@@ -50,7 +50,7 @@ function TableauExplicit{T}(name::Symbol, order::(Int...),
                    a::Matrix{T}, b::Matrix{T}, c::Vector{T})
     TableauExplicit{name,length(c),T}(order, a, b, c)
 end
-function TableauExplicit(name::Symbol, order::(Int...), T,
+function TableauExplicit(name::Symbol, order::(Int...), T::Type,
                    a::Matrix, b::Matrix, c::Vector)
     TableauExplicit{name,length(c),T}(order, convert(Matrix{T},a),
                                         convert(Matrix{T},b), convert(Vector{T},c) )
@@ -132,9 +132,10 @@ bt_feh78 = TableauExplicit(:feh78, (7,8), Float64,
                                   3//205  0      0       0        0        -6//41   -3//205  -3//41  3//41   6//41 0 0 0
                               -1777//4100 0      0    -341//164 4496//1025 -289//82 2193//4100 51//82 33//164 12//41 0 1 0],
                               [41//840 0 0 0 0 34//105 9//35 9//35 9//280 9//280 41//840 0 0
-                               0 0 0 0 0 34//105 9//35 9//35 9//280 9//280 0 41//840 41//840],
-                             [0//1, 2//27, 1//9 , 1//6 , 5//12, 1//2 , 5//6 , 1//6 , 2//3 , 1//3 , 1//1 , 0//1 , 1//1]
+                               0 0 0 0 0 34//105 9//35 9//35 9//280 9//280 0     41//840 41//840],
+                               [0,    2//27, 1//9, 1//6 , 5//12, 1//2 , 5//6 , 1//6 , 2//3 , 1//3 , 1 , 0, 1]
                             )
+
 
 
 # make a Runge-Kutta method for a given Butcher tableau.  Follows
@@ -151,6 +152,9 @@ function transformys{T}(ys::Array{T})
         ys
     end
 end
+
+# returns if t1 is before or at t2 (in direction of integration tdir)
+before(t1, t2, tdir) = tdir*t1 < tdir*t2
 
 # Fixed step Runge-Kutta method
 # TODO: iterator method
@@ -185,10 +189,13 @@ function calc_next_k!{N,S,T}(ks::Matrix, ytmp::Vector, s, fn, t, dt, dof, btab::
     #
     # - ks and ytmp are modified inside this function.
     #
-    # TODO: allow reuse as in Dormand-Price
-    # TODO: calculate all k in one go
+    # TODO:
+    # - allow reuse as in Dormand-Price
+    # - calculate all k in one go
+    # - k as vector of vector
     for ss=1:s-1
         for d=1:dof
+            #@show dt*ks[d,ss] * btab.a[s,ss]
             ytmp[d] += dt * ks[d,ss] * btab.a[s,ss]
         end
     end
@@ -214,7 +221,7 @@ function oderk_adapt{N,S,T}(fn, y0, tspan, btab::TableauExplicit{N,S,T};
 
     # TODO: fix magic numbers
     const large = 1.0e5
-    const facmax = 1.0e5
+    facmax = large
     order = minimum(btab.order)
 
     ## Initialization
@@ -227,44 +234,48 @@ function oderk_adapt{N,S,T}(fn, y0, tspan, btab::TableauExplicit{N,S,T};
     # If tspan is a more than a length two vector: return solution at
     # those points only
     tstepsgiven = length(tspan)>2
-    ntspan = length(tspan)
 
     if tstepsgiven
-        ys = zeros(T, dof, ntspan)
+        nsteps = length(tspan)
+        ys = zeros(T, dof, nsteps)
         ys[:,1] = y0
         y0 = ys[:,1] # now of right type
+        iter = 1 # the index into tspan
     else
         ys = zeros(T, dof)
         ys[:] = y0
         y0 = ys[:] # now of right type
         tspan = [tstart]
-        # TODO check this makes a difference:
+        # TODO check that this makes a difference:
         sizehint_size = 100
         sizehint(tspan, sizehint_size)
         sizehint(ys, sizehint_size)
     end
-    # work arrays:
-    yold   = copy(y0)
+    # Initialize work arrays:
+    y      = copy(y0)  # the y at current time t
     ytrial = zeros(T, dof)
     yerr   = zeros(T, dof)
     ks     = zeros(T, dof, S) 
     ytmp   = zeros(T, dof)
-
-    # Should it be maximum(order(btab)) or minimum(order(btab)):
+    # Initialize time:
     tdir = sign(tend-tstart)
-    dt, f0 = hinit(fn, y0, tstart, tdir, order, reltol, abstol)
+    if initstep == 0.
+        # initial guess at a step size
+        dt, f0 = hinit(fn, y0, tstart, tdir, order, reltol, abstol)
+    else
+        dt = sign(initstep)==tdir ? initstep : error("initstep has wrong sign.")
+    end
+    # Diagnostics
     dts = Float64[]
     errs = Float64[]
-    iter = 1
     steps = [0,0]  # [accepted, rejected]
-
-    while tdir*t < tdir*tend
-        println(" ")
-        # do a step
+    laststep = false
+    while true
+        # do one step
         ytrial[:] = 0
         yerr[:] = 0
         for s=1:S
-            ytmp[:] = yold # needed for calc_next_k!
+            ytmp[:] = y # needed for calc_next_k!
             calc_next_k!(ks, ytmp, s, fn, t, dt, dof, btab)
             for d=1:dof
                 ytrial[d] += btab.b[1,s]*ks[d,s]
@@ -273,73 +284,63 @@ function oderk_adapt{N,S,T}(fn, y0, tspan, btab::TableauExplicit{N,S,T};
         end
         for d=1:dof
             yerr[d]   = dt * (ytrial[d]-yerr[d])
-            ytrial[d] = yold[d] + dt * ytrial[d]
+            ytrial[d] = y[d] + dt * ytrial[d]
         end
-
-
-        #########
-#            dt = diff(tspan)[1]
-
-#         iter += 1
-
-#                     ys[:,iter]= ytrial
-
-#             tmp = yold
-#             yold = ytrial
-#             ytrial = tmp
-
-#             # update t
-#             t += dt
-#              if abs(tend-t-dt)<0.05*dt #tdir*(t+dt) > tdir*(tend + dt*0.01)
-#                  @show                dt = tend-t + eps(tend)
-#             end
-#             steps[1] +=1 
-# continue
-        ############
-        # find a new step size:
-        err, newdt = stepsize_ODE(dt, tdir, yold, ytrial, yerr,
+        
+        # Check error and find a new step size:
+        err, newdt = stepsize_hw92(dt, tdir, y, ytrial, yerr,
                                    abstol, reltol, order, facmax, dof,
                                    maxstep)
-        @show err
-        if err<=1.
-            @show "inc", newdt-dt, dt
-            steps[1] +=1 
+
+        if err<=1.0
+            # diagnostics
+            steps[1] +=1
+            push!(dts, dt)
+            push!(errs, err)
+
+            # Output:
             if tstepsgiven
                 # interpolate onto given output points
                 f0 = ks[:,1]
-                f1 = fn(t+dt, ytrial)
-                while iter<ntspan && tspan[iter+1]<=t+dt  # output at all new times which are ≤ t+dt
+                f1 = fn(t+dt, ytrial) # TODO: this could be used in next step
+                while iter<nsteps && tdir*tspan[iter+1]<=tdir*(t+dt)  # output at all new times which are ≤ t+dt
                     iter += 1
-                    ys[:,iter] = hermite_interp(tspan[iter], t, dt, yold, ytrial, f0, f1)
+                    # ys[:,iter] = hermite_interp(tspan[iter], t, dt,
+                    #                             y, ytrial, f0, f1)
+                    hermite_interp!(ys, iter, tspan[iter], t, dt,
+                                                y, ytrial, f0, f1)
                 end
             else
                 # output every step
                 append!(ys, ytrial)
                 push!(tspan, t+dt)
             end
+            # Break if this was the last step:
+            if laststep
+                break
+            end
 
-            # Swap bindings of yold and ytrial, avoids one copy
-            tmp = yold
-            yold = ytrial
+            # Swap bindings of y and ytrial, avoids one copy
+            tmp = y
+            y = ytrial
             ytrial = tmp
 
-            # update t
+            # Update t to the time at the end of current step:
             t += dt
             dt = newdt
-            # hit end point exactly if close:
-            if abs(tend-(t+dt))/dt < 0.05
-                dt = tend-t + eps(tend) # eps to make sure while loop terminates after next iteration
+
+            # Hit end point exactly if within 1% of end:
+            if !before(t+dt*1.01, tend, tdir)
+                dt = tend-t
+                laststep = true # next step is the last, if it succeeds
             end
-            
-            push!(dts, dt)
-            push!(errs, err)
             facmax = large
         elseif abs(dt)<minstep  # minimum step size reached
             @show length(ys), t, dt
             println("Warning: dt < minstep.  Stopping.")
             break
         else # redo step with smaller dt
-            @show "dec", newdt-dt, dt
+            laststep = false
             steps[2] +=1 
             dt = newdt
             facmax = 1.0 # forbids dt increases in the next step
@@ -347,36 +348,37 @@ function oderk_adapt{N,S,T}(fn, y0, tspan, btab::TableauExplicit{N,S,T};
         end
     end
     if tstepsgiven
-        ys = reshape(ys, dof, ntspan)
+        ys = reshape(ys, dof, nsteps)
     end
     #    xerrs = reshape(xerrs, dof, length(dts))
     @show steps
-    @show errs
     return tspan, transformys(ys)
 end
-ode45_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_rk45, kwargs...)
-ode54_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_dopri5, kwargs...)
-ode78_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_feh78, kwargs...)
+ode45_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_rk45; kwargs...)
+ode54_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_dopri5; kwargs...)
+ode78_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_feh78; kwargs...)
 
 # Helper functions:
 function stepsize_hw92(dt, tdir, x0, xtrial, xerr, abstol, reltol, order,
-                     facmax, dof, maxstep)
+                       facmax, dof, maxstep)
     # Estimates new best step size following
     # Hairer & Wanner 1992, p167 (with some modifications)
-    
+
     # TODO: parameters to lift out of this function 
-    fac = [0.8, 0.9, 0.25^(1/(order+1)), 0.38^(1/(order+1))][2]
+    fac = [0.8, 0.9, 0.25^(1/(order+1)), 0.38^(1/(order+1))][1]
     facmax_def = 2.0 # maximal step size increase. 1.5-5
     facmax = min(facmax_def, facmax)
     facmin = 1./facmax_def  # maximal step size decrease. ?
-    
+
+    any(isnan(xtrial)) && return 10., dt*facmin
+
     # figure out a new step size
     tol = abstol + max(abs(x0), abs(xtrial)).*reltol # 4.10
-    #   err = sqrt(1/dof * sum((xerr./tol).^2) )     # 4.11
-    err = norm(xerr./tol,Inf )     # 4.11
+    err = sqrt(1/dof * sum((xerr./tol).^2) )     # 4.11
+    #err = norm(xerr./tol,Inf )     # 4.11
 
     newdt = dt * min(facmax, max(facmin, fac*(1/err)^(1/(order+1))))
-    return err, min(newdt, maxstep) # this doesn't work with negative steps!
+    return err, tdir*min(tdir*newdt, maxstep)
 end
 
 function stepsize_wh96(dt, tdir, x0, xtrial, xerr, abstol, reltol, order,
@@ -399,7 +401,8 @@ function stepsize_wh96(dt, tdir, x0, xtrial, xerr, abstol, reltol, order,
     err = maximum(abs(xerr./tol))
     # e = 0.9*(1/err)^(1/(order+1))
     # @show e
-                     
+
+    # TODO maxstep
     return err, min( dt * min(c1, max(c2, c3*(1/err)^(1/(order+1))) ), maxstep)
 end
 
@@ -417,7 +420,7 @@ function stepsize_ODE(dt, tdir, x0, xtrial, xerr, abstol, reltol, order,
 end
 
 # For dense output see Hairer & Wanner p.190 using Hermite interpolation
-function hermite_interp(tquery, t,dt,y0,y1,f0,f1)
+function hermite_interp(tquery,t,dt,y0,y1,f0,f1)
     # f_0 = f(x_0 , y_0) , f_1 = f(x_0 + h, y_1 )
     # this is O(3). TODO for higher order.
     theta = (tquery-t)/dt
@@ -425,69 +428,13 @@ function hermite_interp(tquery, t,dt,y0,y1,f0,f1)
            ((1-2*theta)*(y1-y0) + (theta-1)*dt*f0 + theta*dt*f1)
 end
 
-
-# function calc_ks{N,S,T}(fn, t0, y0::Vector, dt, btab::TableauExplicit{N,S,T})
-#     # calculate all k[stage, dof]
-#     dof = length(y0)
-#     ks = zeros(T, S, dof)
-#     for i=1:S
-#         a = zeros(T,dof)
-#         for j=1:i-1
-#             for d =1:dof
-#                 a[d] += btab.a[i,j]*ks[j,d]
-#             end
-#         end
-#         ks[i,:] = fn(t0 + dt*btab.c[i], y0 + dt*a)
-#     end
-#     return ks
-# end
-
-# function rkstep_naive{N,S,T}(fn, t0, y0::Number, dt, btab::TableauExplicit{N,S,T})
-#     # Does an S-stage explicit Runge-Kutta step for RHS f(t,y)
-#     #
-#     # Only for scalar problems
-
-#     ks = calc_ks(fn, t0, [y0], dt, btab)
-#     y = zero(T)
-#     for i=1:S
-#         y += btab.b[1,i]*ks[i]
-#     end
-#     return y0 + dt*y
-# end
-
-# function rkstep_naive{N,S,T}(fn, t0, y0::Vector, dt, btab::TableauExplicit{N,S,T})
-#     # Does an S-stage explicit Runge-Kutta step for RHS f(t,y)
-#     #
-#     # For vector problems
-
-#     ks = calc_ks(fn, t0, y0, dt, btab)
-
-#     dof = length(y0)
-#     y = zeros(T,dof)
-#     for d=1:dof
-#         for i=1:S
-#             y[d] += btab.b[1,i].*ks[i,d]
-#         end
-#     end
-#     return y0 + dt*y
-# end
-
-# function rkstep_embedded_naive{N,S,T}(fn, t0, y0::Vector, dt, btab::TableauExplicit{N,S,T})
-#     # Does an S-stage explicit Runge-Kutta step for RHS f(t,y)
-#     #
-#     # For vector problems. Returns y and an error estimate
-
-#     ks = calc_ks(fn, t0, y0, dt, btab)
-
-#     dof = length(y0)
-#     y = zeros(T,dof)
-#     yerr = zeros(T,dof)
-#     for d=1:dof
-#         for i=1:S
-#             y[d]    += btab.b[1,i].*ks[i,d]
-#             yerr[d] += btab.b[2,i].*ks[i,d]
-#         end
-#     end
-#     return y0 .+ dt*y, dt*(y-yerr), squeeze(ks[1,:],1) # this is f0
-# end
-
+function hermite_interp!(ys, iter, tquery,t,dt,y0,y1,f0,f1)
+    # f_0 = f(x_0 , y_0) , f_1 = f(x_0 + h, y_1 )
+    # this is O(3). TODO for higher order.
+    theta = (tquery-t)/dt
+    for i=1:length(y0)
+        ys[i,iter] = ((1-theta)*y0[i] + theta*y1[i] + theta*(theta-1) *
+                      ((1-2*theta)*(y1[i]-y0[i]) + (theta-1)*dt*f0[i] + theta*dt*f1[i]) )
+    end
+    nothing
+end

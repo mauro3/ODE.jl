@@ -46,7 +46,7 @@ function hinit(F, x0, t0, tdir, p, reltol, abstol)
         pow = -(2. + log10(max(d1, d2)))/(p + 1.)
         h1 = 10.^pow
     end
-    h = min(100*h0, h1), f0
+    h = tdir*min(100*h0, h1), f0
 end
 
 ###############################################################################
