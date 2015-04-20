@@ -1,6 +1,8 @@
 # Butcher Tableaus
 # see Hairer & Wanner 1992, p. 134, 166
 
+using Compat
+
 abstract Tableau{Name, S, T<:FloatingPoint}
 # Name is the name of the tableau/method (a symbol)
 # S is the number of stages (an int)
@@ -30,7 +32,7 @@ order(b::Tableau) = b.order
 # The advantage of each having its own type, makes it possible to have
 # specialized methods for a particular tablau
 immutable TableauRKExplicit{Name, S, T} <: Tableau{Name, S, T}
-    order::(Int...) # the order of the methods
+    order::(@compat(Tuple{Vararg{Int}})) # the order of the methods
     a::Matrix{T}
     # one or several row vectors.  First row is used for the step,
     # second for error calc.
@@ -61,24 +63,24 @@ isFSAL(btab::TableauRKExplicit) = btab.a[end,:]==btab.b[1,:] && btab.c[end]==1 #
 
 ## Tableaus for explicit methods
 # Fixed step:
-bt_feuler = TableauRKExplicit(:feuler,(1,), Float64,
+const bt_feuler = TableauRKExplicit(:feuler,(1,), Float64,
                              zeros(Int,1,1),
                             [1]',
                             [0]
                              )
-bt_midpoint = TableauRKExplicit(:midpoint,(2,), Float64,
+const bt_midpoint = TableauRKExplicit(:midpoint,(2,), Float64,
                                [0  0
                                 .5  0],
                               [0, 1]',
                               [0, .5]
                               )
-bt_heun = TableauRKExplicit(:heun,(2,), Float64,
+const bt_heun = TableauRKExplicit(:heun,(2,), Float64,
                            [0  0
                             1  0],
                           [1//2, 1//2]',
                           [0, 1])
 
-bt_rk4 = TableauRKExplicit(:rk4,(4,),Float64,
+const bt_rk4 = TableauRKExplicit(:rk4,(4,),Float64,
                           [0 0 0 0
                            1//2 0 0 0
                            0 1//2 0 0
@@ -89,7 +91,7 @@ bt_rk4 = TableauRKExplicit(:rk4,(4,),Float64,
 # Adaptive step:
 
 # Fehlberg https://en.wikipedia.org/wiki/Runge%E2%80%93Kutta%E2%80%93Fehlberg_method
-bt_rk45 = TableauRKExplicit(:fehlberg,(4,5),Float64,
+const bt_rk45 = TableauRKExplicit(:fehlberg,(4,5),Float64,
                           [  0           0           0            0         0     0
                              1//4        0           0            0         0     0
                              3//32       9//32       0            0         0     0
@@ -103,7 +105,7 @@ bt_rk45 = TableauRKExplicit(:fehlberg,(4,5),Float64,
                     
 
 # Dormand-Prince https://en.wikipedia.org/wiki/Dormand%E2%80%93Prince_method
-bt_dopri5 = TableauRKExplicit(:dopri, (5,4), Float64,
+const bt_dopri5 = TableauRKExplicit(:dopri, (5,4), Float64,
                      [0   0 0 0 0 0 0
                       1//5 0 0 0 0 0 0
                       3//40     9//40 0 0 0 0 0 
@@ -119,7 +121,7 @@ bt_dopri5 = TableauRKExplicit(:dopri, (5,4), Float64,
 # Fehlberg 7(8) coefficients
 # Values from pag. 65, Fehlberg, Erwin. "Classical fifth-, sixth-, seventh-, and eighth-order Runge-Kutta formulas with stepsize control".
 # National Aeronautics and Space Administration.
-bt_feh78 = TableauRKExplicit(:feh78, (7,8), Float64,
+const bt_feh78 = TableauRKExplicit(:feh78, (7,8), Float64,
                             [     0      0      0       0        0         0       0       0     0      0    0 0 0
                                   2//27   0      0       0        0         0       0       0     0      0    0 0 0
                                   1//36   1//12   0       0        0         0       0       0     0      0    0 0 0
