@@ -328,8 +328,8 @@ function ode_adapt{N,S,T}(fn, y0, tspan, btab::Tableau{N,S,T};
             timeout = 5 # forbids dt increases in the next 5 steps
         end
     end
-    if tstepsgiven
-        ys = reshape(ys, dof, nsteps)
+    if !tstepsgiven
+        ys = reshape(ys, dof, length(tspan))
     end
 #    @show steps
     return tspan, transformys(ys)
