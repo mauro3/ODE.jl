@@ -14,10 +14,10 @@ solvers = [
     ODE.ode45_ck,
 #new:
     ODE.ode4_v2,
-    ODE.ode54_v2,
     ODE.ode45_v2,
+    ODE.ode54_v2,
     ODE.ode78_v2,
-           
+
     ODE.ode23s,
 
     ODE.ode4ms,
@@ -26,30 +26,28 @@ solvers = [
     ODE.ode4s_kr,
 
     ODE.ode78_fb]
-solver = 1
+
 for solver in solvers
-        println(" ")
     println("using $solver")
     # dy
     # -- = 6 ==> y = 6t
     # dt
-    # t,y=solver((t,y)->6, 0., [0:.1:1;])
-    # @test maximum(abs(y-6t)) < tol
+    t,y=solver((t,y)->6, 0., [0:.1:1;])
+    @test maximum(abs(y-6t)) < tol
 
-    # # dy
-    # # -- = 2t ==> y = t.^2
-    # # dt
-    # t,y=solver((t,y)->2t, 0., [0:.001:1;])
-    # @test maximum(abs(y-t.^2)) < tol
+    # dy
+    # -- = 2t ==> y = t.^2
+    # dt
+    t,y=solver((t,y)->2t, 0., [0:.001:1;])
+    @test maximum(abs(y-t.^2)) < tol
 
-    # # dy
-    # # -- = y ==> y = y0*e.^t
-    # # dt
-    # t,y=solver((t,y)->y, 1., [0:.001:1;])
-    # @test maximum(abs(y-e.^t)) < tol
+    # dy
+    # -- = y ==> y = y0*e.^t
+    # dt
+    t,y=solver((t,y)->y, 1., [0:.001:1;])
+    @test maximum(abs(y-e.^t)) < tol
 
-    t,y=solver((t,y)->y, 1., [1:-.001:0.;])
-    @show  maximum(abs(y-e.^(t-1))) 
+    t,y=solver((t,y)->y, 1., [1:-.001:0;])
     @test maximum(abs(y-e.^(t-1))) < tol
  
     # dv       dw
@@ -59,7 +57,6 @@ for solver in solvers
     # y = [v, w]
     t,y=solver((t,y)->[-y[2]; y[1]], [1., 2.], [0:.001:2*pi;])
     ys = hcat(y...).'   # convert Vector{Vector{Float}} to Matrix{Float}
-@show    maximum(abs(ys-[cos(t)-2*sin(t) 2*cos(t)+sin(t)]))
     @test maximum(abs(ys-[cos(t)-2*sin(t) 2*cos(t)+sin(t)])) < tol
 end
 

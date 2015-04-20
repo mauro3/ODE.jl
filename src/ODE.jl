@@ -24,7 +24,8 @@ export ode4s, ode4ms, ode4
 
 # estimator for initial step based on book
 # "Solving Ordinary Differential Equations I" by Hairer et al., p.169
-function hinit(F, x0, t0, tdir, p, reltol, abstol)
+function hinit(F, x0, t0, tend, p, reltol, abstol)
+    tdir = sign(tend-t0)
     tdir==0 && error("Zero time span")
     tau = max(reltol*norm(x0, Inf), abstol)
     d0 = norm(x0, Inf)/tau
@@ -46,7 +47,7 @@ function hinit(F, x0, t0, tdir, p, reltol, abstol)
         pow = -(2. + log10(max(d1, d2)))/(p + 1.)
         h1 = 10.^pow
     end
-    h = tdir*min(100*h0, h1), f0
+    return tdir*min(100*h0, h1), tdir, f0
 end
 
 ###############################################################################
@@ -78,13 +79,13 @@ function oderkf(F, x0, tspan, p, a, bs, bp; reltol = 1.0e-5, abstol = 1.0e-8,
     # Initialization
     t = tspan[1]
     tfinal = tspan[end]
-    tdir = sign(tfinal - t)
 
     h = initstep
     if h == 0.
       # initial guess at a step size
-      h, k[1] = hinit(F, x0, t, tdir, p, reltol, abstol)
+      h, tdir, k[1] = hinit(F, x0, t, tfinal, p, reltol, abstol)
     else
+      tdir = sign(tfinal - t)
       k[1] = F(t, x0) # first stage
     end
     h = tdir*min(h, maxstep)
@@ -352,13 +353,14 @@ function ode23s(F, y0, tspan; reltol = 1.0e-5, abstol = 1.0e-8,
     # initialization
     t = tspan[1]
     tfinal = tspan[end]
-    tdir = sign(tfinal - t)
+
 
     h = initstep
     if h == 0.
       # initial guess at a step size
-      h, F0 = hinit(F, y0, t, tdir, 3, reltol, abstol)
+      h, tdir, F0 = hinit(F, y0, t, tfinal, 3, reltol, abstol)
     else
+      tdir = sign(tfinal - t)
       F0 = F(t,y0)
     end
     h = tdir*min(h, maxstep)
