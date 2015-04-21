@@ -14,9 +14,9 @@ abstract Tableau{Name, S, T<:FloatingPoint}
 #
 # For a tableau:
 #  c1  | a_11   ....   a_1s
-#  .   | a_21 .          .           
-#  .   | a_31     .      .           
-#  .   | ....         .  .           
+#  .   | a_21 .          .
+#  .   | a_31     .      .
+#  .   | ....         .  .
 #  c_s | a_s1  ....... a_ss
 # -----+--------------------
 #      | b_1     ...   b_s   this is the one used for stepping
@@ -87,7 +87,7 @@ const bt_rk4 = TableauRKExplicit(:rk4,(4,),Float64,
                            0 0 1 0],
                          [1//6, 1//3, 1//3, 1//6]',
                          [0, 1//2, 1//2, 1])
-                         
+
 # Adaptive step:
 
 # Fehlberg https://en.wikipedia.org/wiki/Runge%E2%80%93Kutta%E2%80%93Fehlberg_method
@@ -102,13 +102,13 @@ const bt_rk45 = TableauRKExplicit(:fehlberg,(4,5),Float64,
                             16//135      0        6656//12825 28561//56430 -9//50 2//55],
                             [0,          1//4,       3//8,       12//13,    1,    1//2])
 
-                    
+
 
 # Dormand-Prince https://en.wikipedia.org/wiki/Dormand%E2%80%93Prince_method
 const bt_dopri5 = TableauRKExplicit(:dopri, (5,4), Float64,
                      [0   0 0 0 0 0 0
                       1//5 0 0 0 0 0 0
-                      3//40     9//40 0 0 0 0 0 
+                      3//40     9//40 0 0 0 0 0
                       44//45     -56//15     32//9 0 0 0 0
                       19372//6561     -25360//2187     64448//6561     -212//729 0 0 0
                       9017//3168     -355//33     46732//5247     49//176     -5103//18656 0 0
@@ -159,12 +159,12 @@ end
 
 # Fixed step Runge-Kutta method
 # TODO: iterator method
-function oderk_fixed{N,S,T}(fn, y0, tspan::AbstractVector,
+function oderk_fixed{N,S,T}(fn, y0, tspan,
                             btab::TableauRKExplicit{N,S,T})
     dof = length(y0)
     tsteps = length(tspan)
     ys = Array(T, dof, tsteps)
-    ys[:,1] = y0'
+    ys[:,1] = y0.'
     tspan = convert(Vector{T}, tspan)
     # work arrays:
     ks = zeros(T, dof, S)
@@ -191,7 +191,7 @@ function calc_next_k!{N,S,T}(ks::Matrix{T}, ytmp::Vector, y, s, fn, t, dt, dof, 
     for ss=1:s-1, d=1:dof
         ytmp[d] += dt * ks[d,ss] * btab.a[s,ss]
     end
-    ks[:,s] = fn(t + btab.c[s]*dt, ytmp) # ::Vector{T}
+    ks[:,s] = fn(t + btab.c[s]*dt, ytmp)
     nothing
 end
 
@@ -217,7 +217,7 @@ function rk_embedded_step!{N,S}(ytrial, yerr, ks, ytmp, y, fn, t, dt, dof, btab:
             ytrial[d] += btab.b[1,s]*ks[d,s]
             yerr[d]   += btab.b[2,s]*ks[d,s]
         end
-        
+
     end
     for d=1:dof
         yerr[d]   = dt * (ytrial[d]-yerr[d])
@@ -239,7 +239,7 @@ function ode_adapt{N,S,T}(fn, y0, tspan, btab::Tableau{N,S,T};
     # parameters
     timeout_const = 5 # after step reduction do not increase step for
                       # timeout_const steps
-    
+
     order = minimum(btab.order)
 
     ## Initialization
@@ -255,7 +255,7 @@ function ode_adapt{N,S,T}(fn, y0, tspan, btab::Tableau{N,S,T};
     y[:] = y0
     ytrial = zeros(T, dof) # trial solution at time t+dt
     yerr   = zeros(T, dof) # error of trial solution
-    ks     = zeros(T, dof, S) 
+    ks     = zeros(T, dof, S)
     ytmp   = zeros(T, dof)
 
     # If tspan is a more than a length two vector: return solution at
@@ -333,7 +333,7 @@ function ode_adapt{N,S,T}(fn, y0, tspan, btab::Tableau{N,S,T};
             break
         else # redo step with smaller dt
             laststep = false
-            steps[2] +=1 
+            steps[2] +=1
             dt = newdt
             timeout = timeout_const
         end
@@ -360,7 +360,7 @@ function stepsize_hw92(dt, tdir, x0, xtrial, xerr, abstol, reltol, order,
     #  - parameters to lift out of this function
     #  - make type-agnostic
     timout_after_nan = 5
-    fac = [0.8, 0.9, 0.25^(1/(order+1)), 0.38^(1/(order+1))][1] 
+    fac = [0.8, 0.9, 0.25^(1/(order+1)), 0.38^(1/(order+1))][1]
     facmax = 5.0 # maximal step size increase. 1.5-5
     facmin = 1./facmax  # maximal step size decrease. ?
 
@@ -371,7 +371,7 @@ function stepsize_hw92(dt, tdir, x0, xtrial, xerr, abstol, reltol, order,
     tol = abstol + max(abs(x0), abs(xtrial)).*reltol # 4.10
 
     # Eq. 4.11:
-    # err = norm(1/dof^2*xerr./tol, 2)     
+    # err = norm(1/dof^2*xerr./tol, 2)
     err = norm(xerr./tol, 2)     # sans 1/dof
     #err = norm(xerr./tol, Inf)
 
