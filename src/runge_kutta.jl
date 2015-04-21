@@ -228,11 +228,13 @@ end
 
 # Adaptive ODE time stepper
 function ode_adapt{N,S,T}(fn, y0, tspan, btab::Tableau{N,S,T};
-                     reltol = 1.0e-5, abstol = 1.0e-8,
-                     norm=Base.norm,
-                     minstep=abs(tspan[end] - tspan[1])/1e9,
-                     maxstep=abs(tspan[end] - tspan[1])/2.5,
-                     initstep=0.)
+                          reltol = 1.0e-5, abstol = 1.0e-8,
+                          norm=Base.norm,
+                          minstep=abs(tspan[end] - tspan[1])/1e9,
+                          maxstep=abs(tspan[end] - tspan[1])/2.5,
+                          initstep=0.,
+                          points=:all
+                          )
 
     !isadaptive(btab) && error("Can only use this solver with an adpative RK Butcher table")
 
@@ -257,18 +259,24 @@ function ode_adapt{N,S,T}(fn, y0, tspan, btab::Tableau{N,S,T};
     yerr   = zeros(T, dof) # error of trial solution
     ks     = zeros(T, dof, S)
     ytmp   = zeros(T, dof)
+    f0   = zeros(T, dof) # TODO: remove if ks becomes Vector{Vector}
+    f1   = zeros(T, dof) # TODO: remove too
 
     # If tspan is a more than a length two vector: return solution at
     # those points only
-    tstepsgiven = length(tspan)>2
-    if tstepsgiven
+    if points==:specified
         nsteps = length(tspan)
         ys = zeros(T, dof, nsteps)
         ys[:,1] = y
-        iter = 1 # the index into tspan
-    else
+        iter = 2 # the index into tspan
+    elseif points==:all
         ys = copy(y)
+        nsteps_fixed = length(tspan)
+        tspan_fixed = tspan
         tspan = [tstart]
+        iter = 2 # the index into tspan_fixed
+    else
+        error("Unrecognized option points==$points")
     end
     # Time:
     dt, tdir, ks[:,1] = hinit(fn, y, tstart, tend, order, reltol, abstol)
@@ -297,22 +305,27 @@ function ode_adapt{N,S,T}(fn, y0, tspan, btab::Tableau{N,S,T};
             push!(errs, err)
 
             # Output:
-            if tstepsgiven
+            f0[:] = ks[:, 1] 
+            f1[:] = isFSAL(btab) ? ks[:,S] : fn(t+dt, ytrial)
+            if points==:specified
                 # interpolate onto given output points
-                f0 = slice(ks, 1:dof, 1)
-                f1 = isFSAL(btab) ? slice(ks, 1:dof, S) : fn(t+dt, ytrial)
-                while iter<nsteps && (tdir*tspan[iter+1]<=tdir*(t+dt) || laststep) # output at all new times which are ≤ t+dt
-                    iter += 1
+                while iter-1<nsteps && (tdir*tspan[iter]<tdir*(t+dt) || laststep) # output at all new times which are ≤ t+dt
                     hermite_interp!(ys, iter, tspan[iter], t, dt, y, ytrial, f0, f1) # TODO: 3rd order only!
+                    iter += 1
                 end
-                ks[:,1] = f1 # load ks[:,1] for next step
             else
-                # output every step taken
+                # first given points
+                while iter-1<nsteps_fixed && tdir*tspan_fixed[iter]<tdir*(t+dt) # output at all new times which are ≤ t+dt
+                    append!(ys, hermite_interp(tspan_fixed[iter], t, dt, y, ytrial, f0, f1)) # TODO: 3rd order only!
+                    push!(tspan, tspan_fixed[iter])
+                    iter += 1
+                end
+                # but also output every step taken
                 append!(ys, ytrial)
                 push!(tspan, t+dt)
-                # load ks[:,1] for next step
-                ks[:,1] = isFSAL(btab) ? ks[:,end] : fn(t+dt, ytrial)
             end
+            ks[:,1] = f1 # load ks[:,1] for next step
+
             # Break if this was the last step:
             laststep && break
 
@@ -338,7 +351,7 @@ function ode_adapt{N,S,T}(fn, y0, tspan, btab::Tableau{N,S,T};
             timeout = timeout_const
         end
     end
-    if !tstepsgiven
+    if points==:all
         ys = reshape(ys, dof, length(tspan))
     end
 #    @show steps
@@ -397,4 +410,9 @@ function hermite_interp!(ys, iter, tquery,t,dt,y0,y1,f0,f1)
                       ((1-2*theta)*(y1[i]-y0[i]) + (theta-1)*dt*f0[i] + theta*dt*f1[i]) )
     end
     nothing
+end
+function hermite_interp(tquery,t,dt,y0,y1,f0,f1)
+    y = similar(y0)
+    hermite_interp!(y, 1, tquery,t,dt,y0,y1,f0,f1)
+    return y
 end
