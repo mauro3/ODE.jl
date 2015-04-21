@@ -160,10 +160,12 @@ const bt_feh78 = TableauRKExplicit(:feh78, (7,8), Rational{Int64},
 export oderk_fixed, ode_adapt
 
 function make_consistent_types(tspan, y0, btab)
+    # TODO: This needs to be updated
     Tt = promote_type(Float16, eltype(tspan)) # eltype of time
     @assert Tt<:FloatingPoint
     btab = convert(Tt, btab)
-    Ty = promote_type(Tt, eltype(y0))    # eltype of state vector type
+    @assert eltype(y0)<:Number
+    Ty = promote_type(Tt, eltype(y0))    # eltype of state vector
     return Tt, Ty, btab
 end
 
@@ -180,14 +182,18 @@ end
 
 # Fixed step Runge-Kutta method
 # TODO: iterator method
+function oderk_fixed(fn, y0::Number, tspan, btab::TableauRKExplicit)
+    t,y = oderk_fixed(fn, [y0], tspan, btab)
+    return t,vcat(y...)
+end
 function oderk_fixed{N,S}(fn, y0, tspan,
                             btab::TableauRKExplicit{N,S})
     Tt, Ty, btab = make_consistent_types(tspan, y0, btab)
-    
+
     dof = length(y0)
     tsteps = length(tspan)
-    ys = Array(Ty, dof, tsteps)
-    ys[:,1] = y0.'
+    ys = Array(typeof(y0), tsteps)
+    ys[1] = deepcopy(y0)
     tspan = convert(Vector{Tt}, tspan)
     # work arrays:
     ks = zeros(Ty, dof, S)
@@ -195,17 +201,17 @@ function oderk_fixed{N,S}(fn, y0, tspan,
     # time stepping:
     for i=1:length(tspan)-1
         dt = tspan[i+1]-tspan[i]
-        ys[:,i+1] = ys[:,i]
+        ys[i+1] = deepcopy(ys[i])
         for s=1:S
-            ytmp[:] = ys[:,i]
-            calc_next_k!(ks, ytmp, ytmp, s, fn, tspan[i], dt, dof, btab)
+            calc_next_k!(ks, ytmp, ys[i], s, fn, tspan[i], dt, dof, btab)
             for d=1:dof
-                ys[d,i+1] += dt * btab.b[s]*ks[d,s]
+                ys[i+1][d] += dt * btab.b[1,s]*ks[d,s]
             end
         end
     end
-    return tspan, transformys(ys)
+    return tspan, ys
 end
+
 # calculates k[s]
 function calc_next_k!{N,S}(ks::Matrix, ytmp::Vector, y, s, fn, t, dt, dof, btab::TableauRKExplicit{N,S})
     # Calculates the next ks and puts it into ks[:,s]
