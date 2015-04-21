@@ -184,7 +184,7 @@ function oderk_fixed{N,S,T}(fn, y0, tspan,
     return tspan, transformys(ys)
 end
 # calculates k[s]
-function calc_next_k!{N,S,T}(ks::Matrix{T}, ytmp::Vector, y, s, fn, t, dt, dof, btab::TableauRKExplicit{N,S,T})
+function calc_next_k!{N,S}(ks::Matrix, ytmp::Vector, y, s, fn, t, dt, dof, btab::TableauRKExplicit{N,S})
     # Calculates the next ks and puts it into ks[:,s]
     # - ks and ytmp are modified inside this function.
     ytmp[:] = y
@@ -227,7 +227,7 @@ end
 
 
 # Adaptive ODE time stepper
-function ode_adapt{N,S,T}(fn, y0, tspan, btab::Tableau{N,S,T};
+function ode_adapt{N,S,TT}(fn, y0, tspan, btab::Tableau{N,S,TT};
                           reltol = 1.0e-5, abstol = 1.0e-8,
                           norm=Base.norm,
                           minstep=abs(tspan[end] - tspan[1])/1e9,
@@ -238,6 +238,10 @@ function ode_adapt{N,S,T}(fn, y0, tspan, btab::Tableau{N,S,T};
 
     !isadaptive(btab) && error("Can only use this solver with an adpative RK Butcher table")
 
+    # TODO: update after Tableau overhaul
+    Tt = promote_type(eltype(tspan), TT) # eltype of time
+    Ty = promote_type(Tt, eltype(y0))    # eltype of state vector type
+
     # parameters
     timeout_const = 5 # after step reduction do not increase step for
                       # timeout_const steps
@@ -246,27 +250,27 @@ function ode_adapt{N,S,T}(fn, y0, tspan, btab::Tableau{N,S,T};
 
     ## Initialization
     dof = length(y0)
-    tspan = convert(Vector{T}, tspan)
+    tspan = convert(Vector{Tt}, tspan)
     t = tspan[1]
     tstart = tspan[1]
     tend = tspan[end]
     timeout = 0 # for step-control
 
     # work arrays:
-    y = zeros(T, dof)      # y at time t
+    y = zeros(Ty, dof)      # y at time t
     y[:] = y0
-    ytrial = zeros(T, dof) # trial solution at time t+dt
-    yerr   = zeros(T, dof) # error of trial solution
-    ks     = zeros(T, dof, S)
-    ytmp   = zeros(T, dof)
-    f0   = zeros(T, dof) # TODO: remove if ks becomes Vector{Vector}
-    f1   = zeros(T, dof) # TODO: remove too
+    ytrial = zeros(Ty, dof) # trial solution at time t+dt
+    yerr   = zeros(Ty, dof) # error of trial solution
+    ks     = zeros(Ty, dof, S)
+    ytmp   = zeros(Ty, dof)
+    f0   = zeros(Ty, dof) # TODO: remove if ks becomes Vector{Vector}
+    f1   = zeros(Ty, dof) # TODO: remove too
 
     # If tspan is a more than a length two vector: return solution at
     # those points only
     if points==:specified
         nsteps = length(tspan)
-        ys = zeros(T, dof, nsteps)
+        ys = zeros(Ty, dof, nsteps)
         ys[:,1] = y
         iter = 2 # the index into tspan
     elseif points==:all
@@ -289,7 +293,6 @@ function ode_adapt{N,S,T}(fn, y0, tspan, btab::Tableau{N,S,T};
     steps = [0,0]  # [accepted, rejected]
     laststep = false
     # Integration loop
-    ii = 1
     while true
         # do one step (assumes ks[:,1]==f0)
         rk_embedded_step!(ytrial, yerr, ks, ytmp, y, fn, t, dt, dof, btab)
@@ -309,13 +312,13 @@ function ode_adapt{N,S,T}(fn, y0, tspan, btab::Tableau{N,S,T};
             f1[:] = isFSAL(btab) ? ks[:,S] : fn(t+dt, ytrial)
             if points==:specified
                 # interpolate onto given output points
-                while iter-1<nsteps && (tdir*tspan[iter]<tdir*(t+dt) || laststep) # output at all new times which are ≤ t+dt
+                while iter-1<nsteps && (tdir*tspan[iter]<tdir*(t+dt) || laststep) # output at all new times which are < t+dt
                     hermite_interp!(ys, iter, tspan[iter], t, dt, y, ytrial, f0, f1) # TODO: 3rd order only!
                     iter += 1
                 end
             else
                 # first given points
-                while iter-1<nsteps_fixed && tdir*tspan_fixed[iter]<tdir*(t+dt) # output at all new times which are ≤ t+dt
+                while iter-1<nsteps_fixed && tdir*t<tdir*tspan_fixed[iter]<tdir*(t+dt) # output at all new times which are < t+dt
                     append!(ys, hermite_interp(tspan_fixed[iter], t, dt, y, ytrial, f0, f1)) # TODO: 3rd order only!
                     push!(tspan, tspan_fixed[iter])
                     iter += 1
