@@ -174,7 +174,8 @@ function oderk_fixed{N,S,T}(fn, y0, tspan::AbstractVector,
         dt = tspan[i+1]-tspan[i]
         ys[:,i+1] = ys[:,i]
         for s=1:S
-            calc_next_k!(ks, ytmp, slice(ys,1:dof,i), s, fn, tspan[i], dt, dof, btab)
+            ytmp[:] = ys[:,i]
+            calc_next_k!(ks, ytmp, ytmp, s, fn, tspan[i], dt, dof, btab)
             for d=1:dof
                 ys[d,i+1] += dt * btab.b[s]*ks[d,s]
             end
@@ -183,14 +184,14 @@ function oderk_fixed{N,S,T}(fn, y0, tspan::AbstractVector,
     return tspan, transformys(ys)
 end
 # calculates k[s]
-function calc_next_k!{N,S}(ks::Matrix, ytmp::Vector, y, s, fn, t, dt, dof, btab::TableauRKExplicit{N,S})
+function calc_next_k!{N,S,T}(ks::Matrix{T}, ytmp::Vector, y, s, fn, t, dt, dof, btab::TableauRKExplicit{N,S,T})
     # Calculates the next ks and puts it into ks[:,s]
     # - ks and ytmp are modified inside this function.
     ytmp[:] = y
     for ss=1:s-1, d=1:dof
         ytmp[d] += dt * ks[d,ss] * btab.a[s,ss]
     end
-    ks[:,s] = fn(t + btab.c[s]*dt, ytmp)
+    ks[:,s] = fn(t + btab.c[s]*dt, ytmp) # ::Vector{T}
     nothing
 end
 
@@ -235,6 +236,10 @@ function ode_adapt{N,S,T}(fn, y0, tspan, btab::Tableau{N,S,T};
 
     !isadaptive(btab) && error("Can only use this solver with an adpative RK Butcher table")
 
+    # parameters
+    timeout_const = 5 # after step reduction do not increase step for
+                      # timeout_const steps
+    
     order = minimum(btab.order)
 
     ## Initialization
@@ -276,12 +281,15 @@ function ode_adapt{N,S,T}(fn, y0, tspan, btab::Tableau{N,S,T};
     steps = [0,0]  # [accepted, rejected]
     laststep = false
     # Integration loop
+    ii = 1
     while true
         # do one step (assumes ks[:,1]==f0)
         rk_embedded_step!(ytrial, yerr, ks, ytmp, y, fn, t, dt, dof, btab)
+
         # Check error and find a new step size:
         err, newdt, timeout = stepsize_hw92(dt, tdir, y, ytrial, yerr, abstol,
-                                   reltol, order, timeout, dof, maxstep)
+                                            reltol, order, timeout, dof, maxstep)
+
         if err<=1.0 # accept step
             # diagnostics
             steps[1] +=1
@@ -320,14 +328,14 @@ function ode_adapt{N,S,T}(fn, y0, tspan, btab::Tableau{N,S,T};
                 dt = tend-t
                 laststep = true # next step is the last, if it succeeds
             end
-        elseif abs(dt)<minstep  # minimum step size reached, break
+        elseif abs(newdt)<minstep  # minimum step size reached, break
             println("Warning: dt < minstep.  Stopping.")
             break
         else # redo step with smaller dt
             laststep = false
             steps[2] +=1 
             dt = newdt
-            timeout = 5 # forbids dt increases in the next 5 steps
+            timeout = timeout_const
         end
     end
     if !tstepsgiven
@@ -346,41 +354,35 @@ function stepsize_hw92(dt, tdir, x0, xtrial, xerr, abstol, reltol, order,
     # Estimates new best step size following
     # Hairer & Wanner 1992, p167 (with some modifications)
     #
-    # If timeout >0 no step size increase allowed.
+    # If timeout>0 no step size increase is allowed.
 
-    # TODO: parameters to lift out of this function
+    # TODO:
+    #  - parameters to lift out of this function
+    #  - make type-agnostic
     timout_after_nan = 5
-    fac = [0.8, 0.9, 0.25^(1/(order+1)), 0.38^(1/(order+1))][1]
-    facmax = 2.0 # maximal step size increase. 1.5-5
+    fac = [0.8, 0.9, 0.25^(1/(order+1)), 0.38^(1/(order+1))][1] 
+    facmax = 5.0 # maximal step size increase. 1.5-5
     facmin = 1./facmax  # maximal step size decrease. ?
 
     # if NaN present make step size smaller by maximum
     any(isnan(xtrial)) && return 10., dt*facmin, timout_after_nan
 
-    # figure out a new step size
+    # Eq 4.10:
     tol = abstol + max(abs(x0), abs(xtrial)).*reltol # 4.10
-    err = sqrt(1/dof * sum((xerr./tol).^2) )     # 4.11
-    #err = norm(xerr./tol,Inf )     # 4.11
 
-    newdt = dt * min(facmax, max(facmin, fac*(1/err)^(1/(order+1))))
+    # Eq. 4.11:
+    # err = norm(1/dof^2*xerr./tol, 2)     
+    err = norm(xerr./tol, 2)     # sans 1/dof
+    #err = norm(xerr./tol, Inf)
+
+    # Eq 4.13:
+#    newdt = tdir*dt * min(facmax, max(facmin, fac*(1/err)^(1/(order+1))))
+    newdt = min(maxstep, tdir*dt*max(facmin, fac*(1/err)^(1/(order+1)))) # modified
     if timeout>0
         newdt = min(newdt, dt)
+        timeout -= 1
     end
-    return err, tdir*min(tdir*newdt, maxstep), timeout
-end
-
-function stepsize_ODE(dt, tdir, x0, xtrial, xerr, abstol, reltol, order,
-                      facmax, dof, maxstep)
-    # Estimate the local truncation error as used by the original
-    # ODE.jl solvers.  Essential the same as stepsize_hw92.
-    gamma1 = xerr
-    
-    # Estimate the error and the acceptable error
-    delta = norm(gamma1, Inf)              # actual error
-    tau   = max(reltol*norm(x0,Inf),abstol) # allowable error
-    err = delta/tau
-    newdt = tdir*min(maxstep, 0.8*abs(dt)*(1/err)^(1/(order+1)))
-    return err, newdt
+    return err, tdir*min(newdt, maxstep), timeout
 end
 
 # For dense output see Hairer & Wanner p.190 using Hermite interpolation
