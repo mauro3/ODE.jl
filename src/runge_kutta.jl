@@ -3,7 +3,7 @@
 
 using Compat
 
-abstract Tableau{Name, S, T<:FloatingPoint}
+abstract Tableau{Name, S, T<:Number}
 # Name is the name of the tableau/method (a symbol)
 # S is the number of stages (an int)
 # assumes fields
@@ -57,30 +57,43 @@ function TableauRKExplicit(name::Symbol, order::(Int...), T::Type,
     TableauRKExplicit{name,length(c),T}(order, convert(Matrix{T},a),
                                         convert(Matrix{T},b), convert(Vector{T},c) )
 end
+conv_field{T,N}(D,a::Array{T,N}) = convert(Array{D,N}, a)
+function Base.convert{NN<:Number,Name,S,T}(Tnew::Type{NN}, tab::Tableau{Name,S,T})
+    newflds = Any[]
+    for n in names(tab)
+        fld = getfield(tab,n)
+        if eltype(fld)==T
+            push!(newflds, conv_field(Tnew, fld))
+        else
+            push!(newflds, fld)
+        end
+    end
+    eval(:($(typeof(tab).name.name){ $(Base.Meta.quot(Name)) ,$S,$Tnew}($newflds...)))
+end
 
 # First same as last, c.f. H&W p.167
 isFSAL(btab::TableauRKExplicit) = btab.a[end,:]==btab.b[1,:] && btab.c[end]==1 # the latter is not needed really
 
 ## Tableaus for explicit methods
 # Fixed step:
-const bt_feuler = TableauRKExplicit(:feuler,(1,), Float64,
+const bt_feuler = TableauRKExplicit(:feuler,(1,), Rational{Int64},
                              zeros(Int,1,1),
                             [1]',
                             [0]
                              )
-const bt_midpoint = TableauRKExplicit(:midpoint,(2,), Float64,
+const bt_midpoint = TableauRKExplicit(:midpoint,(2,), Rational{Int64},
                                [0  0
                                 .5  0],
                               [0, 1]',
                               [0, .5]
                               )
-const bt_heun = TableauRKExplicit(:heun,(2,), Float64,
+const bt_heun = TableauRKExplicit(:heun,(2,), Rational{Int64},
                            [0  0
                             1  0],
                           [1//2, 1//2]',
                           [0, 1])
 
-const bt_rk4 = TableauRKExplicit(:rk4,(4,),Float64,
+const bt_rk4 = TableauRKExplicit(:rk4,(4,),Rational{Int64},
                           [0 0 0 0
                            1//2 0 0 0
                            0 1//2 0 0
@@ -91,7 +104,7 @@ const bt_rk4 = TableauRKExplicit(:rk4,(4,),Float64,
 # Adaptive step:
 
 # Fehlberg https://en.wikipedia.org/wiki/Runge%E2%80%93Kutta%E2%80%93Fehlberg_method
-const bt_rk45 = TableauRKExplicit(:fehlberg,(4,5),Float64,
+const bt_rk45 = TableauRKExplicit(:fehlberg,(4,5),Rational{Int64},
                           [  0           0           0            0         0     0
                              1//4        0           0            0         0     0
                              3//32       9//32       0            0         0     0
@@ -105,7 +118,7 @@ const bt_rk45 = TableauRKExplicit(:fehlberg,(4,5),Float64,
 
 
 # Dormand-Prince https://en.wikipedia.org/wiki/Dormand%E2%80%93Prince_method
-const bt_dopri5 = TableauRKExplicit(:dopri, (5,4), Float64,
+const bt_dopri5 = TableauRKExplicit(:dopri, (5,4), Rational{Int64},
                      [0   0 0 0 0 0 0
                       1//5 0 0 0 0 0 0
                       3//40     9//40 0 0 0 0 0
@@ -121,7 +134,7 @@ const bt_dopri5 = TableauRKExplicit(:dopri, (5,4), Float64,
 # Fehlberg 7(8) coefficients
 # Values from pag. 65, Fehlberg, Erwin. "Classical fifth-, sixth-, seventh-, and eighth-order Runge-Kutta formulas with stepsize control".
 # National Aeronautics and Space Administration.
-const bt_feh78 = TableauRKExplicit(:feh78, (7,8), Float64,
+const bt_feh78 = TableauRKExplicit(:feh78, (7,8), Rational{Int64},
                             [     0      0      0       0        0         0       0       0     0      0    0 0 0
                                   2//27   0      0       0        0         0       0       0     0      0    0 0 0
                                   1//36   1//12   0       0        0         0       0       0     0      0    0 0 0
@@ -146,6 +159,14 @@ const bt_feh78 = TableauRKExplicit(:feh78, (7,8), Float64,
 # Hairer & Wanner 1992 p.134, p.165-169
 export oderk_fixed, ode_adapt
 
+function make_consistent_types(tspan, y0, btab)
+    Tt = promote_type(Float16, eltype(tspan)) # eltype of time
+    @assert Tt<:FloatingPoint
+    btab = convert(Tt, btab)
+    Ty = promote_type(Tt, eltype(y0))    # eltype of state vector type
+    return Tt, Ty, btab
+end
+
 # to put ys into the vector of vector format:
 function transformys{T}(ys::Array{T})
     if size(ys,1)==1
@@ -159,16 +180,18 @@ end
 
 # Fixed step Runge-Kutta method
 # TODO: iterator method
-function oderk_fixed{N,S,T}(fn, y0, tspan,
-                            btab::TableauRKExplicit{N,S,T})
+function oderk_fixed{N,S}(fn, y0, tspan,
+                            btab::TableauRKExplicit{N,S})
+    Tt, Ty, btab = make_consistent_types(tspan, y0, btab)
+    
     dof = length(y0)
     tsteps = length(tspan)
-    ys = Array(T, dof, tsteps)
+    ys = Array(Ty, dof, tsteps)
     ys[:,1] = y0.'
-    tspan = convert(Vector{T}, tspan)
+    tspan = convert(Vector{Tt}, tspan)
     # work arrays:
-    ks = zeros(T, dof, S)
-    ytmp = zeros(T, dof)
+    ks = zeros(Ty, dof, S)
+    ytmp = zeros(Ty, dof)
     # time stepping:
     for i=1:length(tspan)-1
         dt = tspan[i+1]-tspan[i]
@@ -227,7 +250,7 @@ end
 
 
 # Adaptive ODE time stepper
-function ode_adapt{N,S,TT}(fn, y0, tspan, btab::Tableau{N,S,TT};
+function ode_adapt{N,S}(fn, y0, tspan, btab_::Tableau{N,S};
                           reltol = 1.0e-5, abstol = 1.0e-8,
                           norm=Base.norm,
                           minstep=abs(tspan[end] - tspan[1])/1e9,
@@ -236,12 +259,9 @@ function ode_adapt{N,S,TT}(fn, y0, tspan, btab::Tableau{N,S,TT};
                           points=:all
                           )
 
-    !isadaptive(btab) && error("Can only use this solver with an adpative RK Butcher table")
+    !isadaptive(btab_) && error("Can only use this solver with an adpative RK Butcher table")
 
-    # TODO: update after Tableau overhaul
-    Tt = promote_type(eltype(tspan), TT) # eltype of time
-    Ty = promote_type(Tt, eltype(y0))    # eltype of state vector type
-
+    Tt, Ty, btab = make_consistent_types(tspan, y0, btab_)
     # parameters
     timeout_const = 5 # after step reduction do not increase step for
                       # timeout_const steps
@@ -288,8 +308,8 @@ function ode_adapt{N,S,TT}(fn, y0, tspan, btab::Tableau{N,S,TT};
         dt = sign(initstep)==tdir ? initstep : error("initstep has wrong sign.")
     end
     # Diagnostics
-    dts = Float64[]
-    errs = Float64[]
+    dts = Tt[]
+    errs = Ty[]
     steps = [0,0]  # [accepted, rejected]
     laststep = false
     # Integration loop
