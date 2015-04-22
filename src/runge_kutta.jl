@@ -232,7 +232,7 @@ function oderk_fixed(fn, y0, tspan, btab::TableauRKExplicit)
     t,y = oderk_fixed(fn_, [y0], tspan, btab)
     return t,vcat(y...)
 end
-function oderk_fixed{N,S}(fn, y0::AbstractArray, tspan::AbstractVector,
+function oderk_fixed{N,S}(fn, y0::AbstractVector, tspan,
                           btab_::TableauRKExplicit{N,S})
     Ar, Et, Ey, Ef, btab = make_consistent_types(fn, y0, tspan, btab_)
     
@@ -286,6 +286,7 @@ ode2_heun(fn, y0, tspan) = oderk_fixed(fn, y0, tspan, bt_heun)
 
 # Adaptive ODE time stepper
 function ode_adapt(fn, y0, tspan, btab::Tableau; kwords...)
+    @show "scalar"
     # For y0 which don't support indexing.
     fn_ = (t, y) -> fn(t, y[1])
     t,y = ode_adapt(fn_, [y0], tspan, btab; kwords...)
@@ -342,13 +343,13 @@ function ode_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::Tableau{N,S};
         error("Unrecognized option points==$points")
     end
     # Time:
-    dt, tdir, ks[:,1] = hinit(fn, y, tstart, tend, order, reltol, abstol)
+    dt, tdir, ks[:,1] = hinit_vec(fn, y, tstart, tend, order, reltol, abstol)
     if initstep!=0
         dt = sign(initstep)==tdir ? initstep : error("initstep has wrong sign.")
     end
     # Diagnostics
     dts = Et[]
-    errs = Ey[]
+    errs = Float64[]
     steps = [0,0]  # [accepted, rejected]
 
     # calling into a kernel function which does the heavy lifting.
@@ -418,7 +419,7 @@ function ode_adapt_kernel!{N,S}(ys, ytrial, yerr, ks, ytmp, y, t, dt, fn, dof, b
             laststep && break
 
             # Swap bindings of y and ytrial, avoids one copy
-            y, ytrial = ytrial, y
+             y, ytrial = ytrial, y
 
             # Update t to the time at the end of current step:
             t += dt
@@ -445,8 +446,8 @@ function rk_embedded_step!{N,S}(ytrial, yerr, ks, ytmp, y, fn, t, dt, dof, btab:
     # Assumes that ks[:,1] is already calculated!
     #
     # Modifies ytrial, yerr, ks, and ytmp
-    ytrial[:] = 0
-    yerr[:] = 0
+    ytrial[:] = zero(eltype(ytrial))
+    yerr[:] = zero(eltype(ytrial))
     for d=1:dof
         ytrial[d] += btab.b[1,1]*ks[d,1]
         yerr[d]   += btab.b[2,1]*ks[d,1]
@@ -524,3 +525,38 @@ end
 ode45_v2(fn, y0, tspan; kwargs...) = ode_adapt(fn, y0, tspan, bt_rk45; kwargs...)
 ode54_v2(fn, y0, tspan; kwargs...) = ode_adapt(fn, y0, tspan, bt_dopri5; kwargs...)
 ode78_v2(fn, y0, tspan; kwargs...) = ode_adapt(fn, y0, tspan, bt_feh78; kwargs...)
+
+####
+function hinit_vec(F_, x0, t0, tend, p, reltol, abstol)
+    # a hack, update to do component-wise
+    if length(x0)==1
+        x0 = x0[1]
+        F = (t,x) -> F_(t,[x])
+    else
+        F = F_
+    end
+
+    tdir = sign(tend-t0)
+    tdir==0 && error("Zero time span")
+    tau = max(reltol*norm(x0, Inf), abstol)
+    d0 = norm(x0, Inf)/tau
+    f0 = F(t0, x0)
+    d1 = norm(f0, Inf)/tau
+    if d0 < 1e-5 || d1 < 1e-5
+        h0 = 1e-6
+    else
+        h0 = 0.01*(d0/d1)
+    end
+    # perform Euler step
+    x1 = x0 + tdir*h0*f0
+    f1 = F(t0 + tdir*h0, x1)
+    # estimate second derivative
+    d2 = norm(f1 - f0, Inf)/(tau*h0)
+    if max(d1, d2) <= 1e-15
+        h1 = max(1e-6, 1e-3*h0)
+    else
+        pow = -(2. + log10(max(d1, d2)))/(p + 1.)
+        h1 = 10.^pow
+    end
+    return tdir*min(100*h0, h1), tdir, f0
+end
