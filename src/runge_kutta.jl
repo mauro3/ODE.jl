@@ -1,7 +1,8 @@
+using Compat
+
+###################
 # Butcher Tableaus
 # see Hairer & Wanner 1992, p. 134, 166
-
-using Compat
 
 abstract Tableau{Name, S, T<:Real}
 # Name is the name of the tableau/method (a symbol)
@@ -61,7 +62,7 @@ end
 conv_field{T,N}(D,a::Array{T,N}) = convert(Array{D,N}, a)
 function Base.convert{NN<:Number,Name,S,T}(Tnew::Type{NN}, tab::TableauRKExplicit{Name,S,T})
     newflds = ()
-    for n in names(tab)
+    @compat for n in fieldnames(tab)
         fld = getfield(tab,n)
         if eltype(fld)==T
             newflds = tuple(newflds..., conv_field(Tnew, fld))
@@ -155,72 +156,43 @@ const bt_feh78 = TableauRKExplicit(:feh78, (7,8), Rational{Int64},
                             )
 
 
+###########################
+# Runge-Kutta solvers
+# (Hairer & Wanner 1992 p.134, p.165-169)
 
-# make a Runge-Kutta method for a given Butcher tableau.  Follows
-# Hairer & Wanner 1992 p.134, p.165-169
-export oderk_fixed, ode_adapt
-
-# to put ys into the vector of vector format:
-function transformys{T}(ys::Array{T})
-    if size(ys,1)==1
-        squeeze(ys,1)
-    elseif length(size(ys))!=1
-        Vector{T}[ys[:,i] for i=1:size(ys,2)]
-    else
-        ys
-    end
-end
-
-# Getting the primary type of a type is tricky:
-# https://groups.google.com/d/msg/julia-users/Khe1Eh-K6i0/Vhau1ySJ5oMJ
-ar_type(a::Array) = Array # special case Array
-ar_type(a) = typeof(a).name.primary
 function make_consistent_types(fn, y0, tspan, btab)
     # There are a few types involved which somehow need to be consistent:
-    #
-    # Tt = typeof(tspan)
-    # Ty = typeof(y0)
-    # Tf = typeof(F(tspan(1),y0))  # note, this can be a scalar
     #
     # Et = eltype(tspan)
     # Ey = eltype(y0)
     # Ef = eltype(Tf)
     #
-    # Ebt = Tableau{_,_,Ebt}
+    # There are also the types of the containers, but they are not
+    # needed as `similar` is used to make containers.
+    # Tt = typeof(tspan)
+    # Ty = typeof(y0)              # note, this can be a scalar
+    # Tf = typeof(F(tspan(1),y0))  # note, this can be a scalar
     #
     # Returns
-    # - Et: eltype of time, needs to be a real "continuous" type
+    # - Et: eltype of time, needs to be a real "continuous" type, at
+    #       the moment a FloatingPoint
     # - Ey: eltype of y
     # - Ef: eltype of fn(t,y)
     #   --> both of these are set to typeof(y0[1]/tspan[1])
     # - btab: tableau with entries converted to Et
-    #
-    # Issues:
-    # - Julia cannot infer the type of Ar, thus this is not type-stable
 
-    Ty, Ey = typeof(y0), typeof(y0[1]/(tspan[end]-tspan[1]))
+    Ey = typeof(y0[1]/(tspan[end]-tspan[1]))
+    Ef = Ey # this could be changed if function type become available
 
-    ## TODO:
-    ## This could be changed once function types are available:
-    # Tf = eltype(fn(tspan[1], y0))
-    # Ef =  eltype(Tf)
-    ## Ey and Ef could be separate but probably not worth the hassle:
-    # Ey = promote_type(Ey, Ef)
-    # Ef = Ey
-    ## but for now:
-    Ef = Ey
-
-    # Tt = typeof(tspan)
     Et = promote_type(eltype(tspan), Float16)
     @assert Et<:Real
     @assert isleaftype(Et) # maybe shouldn't error, only warn.
 
     btab_ = convert(Et, btab)
-    # only return needed types
     return Et, Ey, Ef, btab_
 end
-make_array_type(Ty::Type) = Ty.name.primary
 
+######
 # Fixed step Runge-Kutta method
 # TODO: iterator method
 function oderk_fixed(fn, y0, tspan, btab::TableauRKExplicit)
@@ -231,8 +203,8 @@ function oderk_fixed(fn, y0, tspan, btab::TableauRKExplicit)
 end
 function oderk_fixed{N,S}(fn, y0::AbstractVector, tspan,
                           btab_::TableauRKExplicit{N,S})
+    # TODO: instead of AbstractVector use a Holy-trait
     Et, Ey, Ef, btab = make_consistent_types(fn, y0, tspan, btab_)
-    
     dof = length(y0)
     tsteps = length(tspan)
     ys = similar(y0, Ey, dof, tsteps)
@@ -245,8 +217,8 @@ function oderk_fixed{N,S}(fn, y0::AbstractVector, tspan,
         dt = tspan[i+1]-tspan[i]
         ys[:,i+1] = ys[:,i] # this also allocates a bit...
         for s=1:S
-            for d=1:dof
-                ytmp[d] = ys[d,i] # ytmp[:] = ys[:,i] allocates!
+            for d=1:dof # loop as ytmp[:] = ys[:,i] allocates!
+                ytmp[d] = ys[d,i]
             end
             calc_next_k!(ks, ytmp, ytmp, s, fn, tspan[i], dt, dof, btab)
             for d=1:dof
@@ -254,28 +226,8 @@ function oderk_fixed{N,S}(fn, y0::AbstractVector, tspan,
             end
         end
     end
-    # time stepping: (a function-call is needed for type inference)
-    # updates ys and uses ks, ytmp as work arrays
-#    oderk_fixed_kernel!(ys, ks, ytmp, fn, tspan, dof, btab) 
     return tspan, ys
 end
-# function oderk_fixed_kernel!{N,S}(ys, ks, ytmp, fn, tspan, dof,
-#                                   btab::TableauRKExplicit{N,S})
-#     # updates ys and uses ks, ytmp as work arrays
-#     for i=1:length(tspan)-1
-#         dt = tspan[i+1]-tspan[i]
-#         ys[:,i+1] = ys[:,i] # this also allocates a bit...
-#         for s=1:S
-#             for d=1:dof
-#                 ytmp[d] = ys[d,i] # ytmp[:] = ys[:,i] allocates!
-#             end
-#             calc_next_k!(ks, ytmp, ytmp, s, fn, tspan[i], dt, dof, btab)
-#             for d=1:dof
-#                 ys[d,i+1] += dt * btab.b[s]*ks[d,s]
-#             end
-#         end
-#     end
-# end
 
 # calculates k[s]
 function calc_next_k!{N,S}(ks::Matrix, ytmp::Vector, y, s, fn, t, dt, dof, btab::TableauRKExplicit{N,S})
@@ -296,13 +248,13 @@ ode2_heun(fn, y0, tspan) = oderk_fixed(fn, y0, tspan, bt_heun)
 
 
 # Adaptive ODE time stepper
-function ode_adapt(fn, y0, tspan, btab::Tableau; kwords...)
+function oderk_adapt(fn, y0, tspan, btab::TableauRKExplicit; kwords...)
     # For y0 which don't support indexing.
     fn_ = (t, y) -> fn(t, y[1])
-    t,y = ode_adapt(fn_, [y0], tspan, btab; kwords...)
+    t,y = oderk_adapt(fn_, [y0], tspan, btab; kwords...)
     return t, y[:]
 end
-function ode_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::Tableau{N,S};
+function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplicit{N,S};
                           reltol = 1.0e-5, abstol = 1.0e-8,
 #                          norm=Base.norm,
                           minstep=abs(tspan[end] - tspan[1])/1e9,
@@ -317,6 +269,8 @@ function ode_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::Tableau{N,S};
     Et, Ey, Ef, btab = make_consistent_types(fn, y0, tspan, btab_)
     # parameters
     order = minimum(btab.order)
+    timeout_const = 5 # after step reduction do not increase step for
+                      # timeout_const steps
 
     ## Initialization
     dof = length(y0)
@@ -332,11 +286,10 @@ function ode_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::Tableau{N,S};
     yerr   = similar(y0, Ey, dof) # error of trial solution
     ks     = similar(y0, Ey, dof, S)
     ytmp   = similar(y0, Ey, dof)
-    f0     = similar(y0, Ey, dof) # TODO: remove if ks becomes Vector{Vector}
-    f1     = similar(y0, Ey, dof) # TODO: remove too
+    f0     = similar(y0, Ey, dof)
+    f1     = similar(y0, Ey, dof)
 
-    # If tspan is a more than a length two vector: return solution at
-    # those points only
+    # Option points determines where solution is returned:
     if points==:specified
         nsteps = length(tspan)
         ys = similar(y0, Ey, dof, nsteps)
@@ -351,8 +304,8 @@ function ode_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::Tableau{N,S};
     else
         error("Unrecognized option points==$points")
     end
-    # Time:
-    dt, tdir, ks[:,1] = hinit_vec(fn, y, tstart, tend, order, reltol, abstol)
+    # Time
+    dt, tdir, ks[:,1] = hinit_vec(fn, y, tstart, tend, order, reltol, abstol) # ks[:,1]==f0
     if initstep!=0
         dt = sign(initstep)==tdir ? initstep : error("initstep has wrong sign.")
     end
@@ -361,13 +314,10 @@ function ode_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::Tableau{N,S};
     errs = Float64[]
     steps = [0,0]  # [accepted, rejected]
 
-    timeout_const = 5 # after step reduction do not increase step for
-                      # timeout_const steps
-
+    ## Integration loop
     laststep = false
     timeout = 0 # for step-control
     iter = 2 # the index into tspan/tspan_fixed
-    # Integration loop
     while true
         # do one step (assumes ks[:,1]==f0)
         rk_embedded_step!(ytrial, yerr, ks, ytmp, y, fn, t, dt, dof, btab)
@@ -383,7 +333,7 @@ function ode_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::Tableau{N,S};
             push!(errs, err)
 
             # Output:
-            f0[:] = ks[:, 1] 
+            f0[:] = ks[:, 1]
             f1[:] = isFSAL(btab) ? ks[:,S] : fn(t+dt, ytrial)
             if points==:specified
                 # interpolate onto given output points
@@ -392,7 +342,7 @@ function ode_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::Tableau{N,S};
                     iter += 1
                 end
             else
-                # first given points
+                # first interpolate onto given output points
                 while iter-1<nsteps && tdir*t<tdir*tspan_fixed[iter]<tdir*(t+dt) # output at all new times which are < t+dt
                     append!(ys, hermite_interp(tspan_fixed[iter], t, dt, y, ytrial, f0, f1)) # TODO: 3rd order only!
                     push!(tspan, tspan_fixed[iter])
@@ -408,7 +358,7 @@ function ode_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::Tableau{N,S};
             laststep && break
 
             # Swap bindings of y and ytrial, avoids one copy
-             y, ytrial = ytrial, y
+            y, ytrial = ytrial, y
 
             # Update t to the time at the end of current step:
             t += dt
@@ -429,7 +379,7 @@ function ode_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::Tableau{N,S};
             timeout = timeout_const
         end
     end
-    
+
     #    @show steps
     if points==:all
         ys = reshape(ys, dof, length(tspan))
@@ -481,8 +431,8 @@ function stepsize_hw92(dt, tdir, x0, xtrial, xerr, abstol, reltol, order,
     # if NaN present make step size smaller by maximum
     any(isnan(xtrial)) && return 10., dt*facmin, timout_after_nan
 
-    # Eq 4.10:
-    tol = abstol + max(abs(x0), abs(xtrial)).*reltol # 4.10
+    # Eq 4.10, component-wise tolerance:
+    tol = abstol + max(abs(x0), abs(xtrial)).*reltol
 
     # Eq. 4.11:
     # err = norm(1/dof^2*xerr./tol, 2)
@@ -518,11 +468,7 @@ function hermite_interp(tquery,t,dt,y0,y1,f0,f1)
     return y
 end
 
-ode45_v2(fn, y0, tspan; kwargs...) = ode_adapt(fn, y0, tspan, bt_rk45; kwargs...)
-ode54_v2(fn, y0, tspan; kwargs...) = ode_adapt(fn, y0, tspan, bt_dopri5; kwargs...)
-ode78_v2(fn, y0, tspan; kwargs...) = ode_adapt(fn, y0, tspan, bt_feh78; kwargs...)
-
-####
+#### TODO tidy this up:
 function hinit_vec(F_, x0, t0, tend, p, reltol, abstol)
     # a hack, update to do component-wise (TODO)
     if length(x0)==1
@@ -556,3 +502,8 @@ function hinit_vec(F_, x0, t0, tend, p, reltol, abstol)
     end
     return tdir*min(100*h0, h1), tdir, f0
 end
+
+
+ode45_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_rk45; kwargs...)
+ode54_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_dopri5; kwargs...)
+ode78_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_feh78; kwargs...)
