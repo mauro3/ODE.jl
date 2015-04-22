@@ -3,7 +3,7 @@
 
 using Compat
 
-abstract Tableau{Name, S, T<:Number}
+abstract Tableau{Name, S, T<:Real}
 # Name is the name of the tableau/method (a symbol)
 # S is the number of stages (an int)
 # assumes fields
@@ -32,7 +32,8 @@ order(b::Tableau) = b.order
 # The advantage of each having its own type, makes it possible to have
 # specialized methods for a particular tablau
 immutable TableauRKExplicit{Name, S, T} <: Tableau{Name, S, T}
-    order::(@compat(Tuple{Vararg{Int}})) # the order of the methods
+#    order::(@compat(Tuple{Vararg{Int}})) # the order of the methods
+    order::(Int...) # the order of the methods
     a::Matrix{T}
     # one or several row vectors.  First row is used for the step,
     # second for error calc.
@@ -58,17 +59,17 @@ function TableauRKExplicit(name::Symbol, order::(Int...), T::Type,
                                         convert(Matrix{T},b), convert(Vector{T},c) )
 end
 conv_field{T,N}(D,a::Array{T,N}) = convert(Array{D,N}, a)
-function Base.convert{NN<:Number,Name,S,T}(Tnew::Type{NN}, tab::Tableau{Name,S,T})
-    newflds = Any[]
+function Base.convert{NN<:Number,Name,S,T}(Tnew::Type{NN}, tab::TableauRKExplicit{Name,S,T})
+    newflds = ()
     for n in names(tab)
         fld = getfield(tab,n)
         if eltype(fld)==T
-            push!(newflds, conv_field(Tnew, fld))
+            newflds = tuple(newflds..., conv_field(Tnew, fld))
         else
-            push!(newflds, fld)
+            newflds = tuple(newflds..., fld)
         end
     end
-    eval(:($(typeof(tab).name.name){ $(Base.Meta.quot(Name)) ,$S,$Tnew}($newflds...)))
+    TableauRKExplicit{Name,S,Tnew}(newflds...) # could this be more generically?
 end
 
 # First same as last, c.f. H&W p.167
@@ -159,16 +160,6 @@ const bt_feh78 = TableauRKExplicit(:feh78, (7,8), Rational{Int64},
 # Hairer & Wanner 1992 p.134, p.165-169
 export oderk_fixed, ode_adapt
 
-function make_consistent_types(tspan, y0, btab)
-    # TODO: This needs to be updated
-    Tt = promote_type(Float16, eltype(tspan)) # eltype of time
-    @assert Tt<:FloatingPoint
-    btab = convert(Tt, btab)
-    @assert eltype(y0)<:Number
-    Ty = promote_type(Tt, eltype(y0))    # eltype of state vector
-    return Tt, Ty, btab
-end
-
 # to put ys into the vector of vector format:
 function transformys{T}(ys::Array{T})
     if size(ys,1)==1
@@ -180,36 +171,94 @@ function transformys{T}(ys::Array{T})
     end
 end
 
+ar_type(a::Array) = Array # special case Array
+ar_type(a) = typeof(a).name.primary
+function make_consistent_types(fn, y0, tspan, btab)
+    # There are a few types involved which somehow need to be consistent:
+    #
+    # Tt = typeof(tspan)
+    # Ty = typeof(y0)
+    # Tf = typeof(F(tspan(1),y0))  # note, this can be a scalar
+    #
+    # Et = eltype(tspan)
+    # Ey = eltype(y0)
+    # Ef = eltype(Tf)
+    #
+    # Ebt = Tableau{_,_,Ebt}
+    #
+    # Returns
+    # - Ar: Container type to be used for ys and various work arrays
+    #       (needs to be 1D and 2D capable, and hold Ey and Ef types)
+    # - Et: eltype of time, needs to be a real "continuous" type
+    # - Ey: eltype of y
+    # - Ef: eltype of fn(t,y)
+    # - btab: tableau with entries converted to Et
+    #
+    # Issues:
+    # - Julia cannot infer the type of Ar, thus this is not type-stable
+    
+    Ty, Ey = typeof(y0), eltype(y0)
+
+    Ar = ar_type(y0)
+    
+    # This could be changed once function types are available
+    # to eltype(fn(tspan[1], y0))
+    Tf = Ty 
+    Ef = eltype(Tf)
+
+    # Ey and Ef could be separate but probably not worth the hassle:
+    Ey = promote_type(Ey, Ef)
+    Ef = Ey
+    
+    Tt = typeof(tspan)
+    Et = promote_type(eltype(Tt), Float16)
+    @assert Et<:Real
+
+    btab_ = convert(Et, btab)
+    # only return needed types
+    return Ar, Et, Ey, Ef, btab_
+end
+make_array_type(Ty::Type) = Ty.name.primary
+
 # Fixed step Runge-Kutta method
 # TODO: iterator method
-function oderk_fixed(fn, y0::Number, tspan, btab::TableauRKExplicit)
+function oderk_fixed(fn, y0, tspan, btab::TableauRKExplicit)
+    # Non-arrays y0 treat as scalar
+    fn_ = (t, y) -> fn(t, y[1])
     t,y = oderk_fixed(fn, [y0], tspan, btab)
     return t,vcat(y...)
 end
-function oderk_fixed{N,S}(fn, y0, tspan,
-                            btab::TableauRKExplicit{N,S})
-    Tt, Ty, btab = make_consistent_types(tspan, y0, btab)
-
+function oderk_fixed{N,S}(fn, y0::AbstractArray, tspan::AbstractVector,
+                          btab_::TableauRKExplicit{N,S})
+    Ar, Et, Ey, Ef, btab = make_consistent_types(fn, y0, tspan, btab_)
+    
     dof = length(y0)
     tsteps = length(tspan)
-    ys = Array(typeof(y0), tsteps)
-    ys[1] = deepcopy(y0)
-    tspan = convert(Vector{Tt}, tspan)
+    ys = Ar(Ey, dof, tsteps)
+    ys[:,1] = y0
+    tspan = convert(Vector{Et}, tspan)
     # work arrays:
-    ks = zeros(Ty, dof, S)
-    ytmp = zeros(Ty, dof)
-    # time stepping:
+    ks = Ar(Ef, dof, S)
+    ytmp = Ar(Ey, dof)
+    # time stepping: (a function-call is needed for type inference)
+    kernel_oderk_fixed!(ks, ys, ytmp, fn, tspan, dof, btab) 
+    return tspan, transformys(ys)
+end
+function kernel_oderk_fixed!{N,S}(ks, ys, ytmp, fn, tspan, dof,
+                            btab::TableauRKExplicit{N,S})
     for i=1:length(tspan)-1
         dt = tspan[i+1]-tspan[i]
-        ys[i+1] = deepcopy(ys[i])
+        ys[:,i+1] = ys[:,i] # this also allocates a bit...
         for s=1:S
-            calc_next_k!(ks, ytmp, ys[i], s, fn, tspan[i], dt, dof, btab)
             for d=1:dof
-                ys[i+1][d] += dt * btab.b[1,s]*ks[d,s]
+                ytmp[d] = ys[d,i] # ytmp[:] = ys[:,i] allocates?!
+            end
+            calc_next_k!(ks, ytmp, ytmp, s, fn, tspan[i], dt, dof, btab)
+            for d=1:dof
+                ys[d,i+1] += dt * btab.b[s]*ks[d,s]
             end
         end
     end
-    return tspan, ys
 end
 
 # calculates k[s]
@@ -256,6 +305,10 @@ end
 
 
 # Adaptive ODE time stepper
+function ode_adapt(fn, y0::Number, tspan, btab::Tableau; kwords...)
+    t,y = ode_adapt(fn, [y0], tspan, btab; kwords...)
+    return t, vcat(y...)
+end
 function ode_adapt{N,S}(fn, y0, tspan, btab_::Tableau{N,S};
                           reltol = 1.0e-5, abstol = 1.0e-8,
                           norm=Base.norm,
@@ -267,7 +320,7 @@ function ode_adapt{N,S}(fn, y0, tspan, btab_::Tableau{N,S};
 
     !isadaptive(btab_) && error("Can only use this solver with an adpative RK Butcher table")
 
-    Tt, Ty, btab = make_consistent_types(tspan, y0, btab_)
+    Ar, Et, Ey, Ef, btab = make_consistent_types(fn, y0, tspan, btab_)
     # parameters
     timeout_const = 5 # after step reduction do not increase step for
                       # timeout_const steps
@@ -283,24 +336,24 @@ function ode_adapt{N,S}(fn, y0, tspan, btab_::Tableau{N,S};
     timeout = 0 # for step-control
 
     # work arrays:
-    y = zeros(Ty, dof)      # y at time t
+    y = zeros(Ey, dof)      # y at time t
     y[:] = y0
-    ytrial = zeros(Ty, dof) # trial solution at time t+dt
-    yerr   = zeros(Ty, dof) # error of trial solution
-    ks     = zeros(Ty, dof, S)
-    ytmp   = zeros(Ty, dof)
-    f0   = zeros(Ty, dof) # TODO: remove if ks becomes Vector{Vector}
-    f1   = zeros(Ty, dof) # TODO: remove too
+    ytrial = zeros(Ey, dof) # trial solution at time t+dt
+    yerr   = zeros(Ey, dof) # error of trial solution
+    ks     = zeros(Ey, dof, S)
+    ytmp   = zeros(Ey, dof)
+    f0     = zeros(Ey, dof) # TODO: remove if ks becomes Vector{Vector}
+    f1     = zeros(Ey, dof) # TODO: remove too
 
     # If tspan is a more than a length two vector: return solution at
     # those points only
     if points==:specified
         nsteps = length(tspan)
-        ys = zeros(Ty, dof, nsteps)
+        ys = Array(typeof(y0), nsteps)  # TODO: should this be 
         ys[:,1] = y
         iter = 2 # the index into tspan
     elseif points==:all
-        ys = copy(y)
+#        ys = Array(typeof(
         nsteps_fixed = length(tspan)
         tspan_fixed = tspan
         tspan = [tstart]
@@ -315,7 +368,7 @@ function ode_adapt{N,S}(fn, y0, tspan, btab_::Tableau{N,S};
     end
     # Diagnostics
     dts = Tt[]
-    errs = Ty[]
+    errs = Ey[]
     steps = [0,0]  # [accepted, rejected]
     laststep = false
     # Integration loop
