@@ -184,9 +184,14 @@ function make_consistent_types(fn, y0, tspan, btab)
     Ey = typeof(y0[1]/(tspan[end]-tspan[1]))
     Ef = Ey # this could be changed if function type become available
 
-    Et = promote_type(eltype(tspan), Float16)
+    Et = eltype(tspan)
     @assert Et<:Real
-    @assert isleaftype(Et) # maybe shouldn't error, only warn.
+    if !(Et<:FloatingPoint)
+        Et = promote_type(Et, Float64)
+    end
+    if isleaftype(Et)
+        warn("The eltype(tspan) is not a concrete type!  Change for better performance.")
+    end
 
     btab_ = convert(Et, btab)
     return Et, Ey, Ef, btab_
@@ -197,7 +202,7 @@ end
 # TODO: iterator method
 function oderk_fixed(fn, y0, tspan, btab::TableauRKExplicit)
     # Non-arrays y0 treat as scalar
-    fn_ = (t, y) -> fn(t, y[1])
+    fn_ = (t, y) -> [fn(t, y[1])]
     t,y = oderk_fixed(fn_, [y0], tspan, btab)
     return t,y[:]
 end
@@ -215,7 +220,9 @@ function oderk_fixed{N,S}(fn, y0::AbstractVector, tspan,
     ytmp = similar(y0, Ey, dof)
     for i=1:length(tspan)-1
         dt = tspan[i+1]-tspan[i]
-        ys[:,i+1] = ys[:,i] # this also allocates a bit...
+        for d=1:dof
+            ys[d,i+1] = ys[d,i]
+        end
         for s=1:S
             for d=1:dof # loop as ytmp[:] = ys[:,i] allocates!
                 ytmp[d] = ys[d,i]
@@ -230,14 +237,14 @@ function oderk_fixed{N,S}(fn, y0::AbstractVector, tspan,
 end
 
 # calculates k[s]
-function calc_next_k!{N,S}(ks::Matrix, ytmp::Vector, y, s, fn, t, dt, dof, btab::TableauRKExplicit{N,S})
+function calc_next_k!{N,S,Ty}(ks::Matrix, ytmp::Ty, y, s, fn, t, dt, dof, btab::TableauRKExplicit{N,S})
     # Calculates the next ks and puts it into ks[:,s]
     # - ks and ytmp are modified inside this function.
     ytmp[:] = y
     for ss=1:s-1, d=1:dof
         ytmp[d] += dt * ks[d,ss] * btab.a[s,ss]
     end
-    ks[:,s] = fn(t + btab.c[s]*dt, ytmp)
+    ks[:,s] = fn(t + btab.c[s]*dt, ytmp)::Ty
     nothing
 end
 
@@ -250,7 +257,7 @@ ode2_heun(fn, y0, tspan) = oderk_fixed(fn, y0, tspan, bt_heun)
 # Adaptive ODE time stepper
 function oderk_adapt(fn, y0, tspan, btab::TableauRKExplicit; kwords...)
     # For y0 which don't support indexing.
-    fn_ = (t, y) -> fn(t, y[1])
+    fn_ = (t, y) -> [fn(t, y[1])]
     t,y = oderk_adapt(fn_, [y0], tspan, btab; kwords...)
     return t, y[:]
 end
