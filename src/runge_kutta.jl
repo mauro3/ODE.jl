@@ -69,38 +69,38 @@ function Base.convert{NN<:Number,Name,S,T}(Tnew::Type{NN}, tab::TableauRKExplici
             newflds = tuple(newflds..., fld)
         end
     end
-    TableauRKExplicit{Name,S,Tnew}(newflds...) # could this be more generically?
+    TableauRKExplicit{Name,S,Tnew}(newflds...) # TODO: could this be done more generically in a type-stable way?
 end
 
-# First same as last, c.f. H&W p.167
+# First same as last.  Means ks[:,end]=ks_nextstep[:,1], c.f. H&W p.167
 isFSAL(btab::TableauRKExplicit) = btab.a[end,:]==btab.b[1,:] && btab.c[end]==1 # the latter is not needed really
 
 ## Tableaus for explicit methods
 # Fixed step:
 const bt_feuler = TableauRKExplicit(:feuler,(1,), Rational{Int64},
-                             zeros(Int,1,1),
-                            [1]',
-                            [0]
-                             )
+                                    zeros(Int,1,1),
+                                    [1]',
+                                    [0]
+                                    )
 const bt_midpoint = TableauRKExplicit(:midpoint,(2,), Rational{Int64},
-                               [0  0
-                                .5  0],
-                              [0, 1]',
-                              [0, .5]
-                              )
+                                      [0  0
+                                       .5  0],
+                                      [0, 1]',
+                                      [0, .5]
+                                      )
 const bt_heun = TableauRKExplicit(:heun,(2,), Rational{Int64},
-                           [0  0
-                            1  0],
-                          [1//2, 1//2]',
-                          [0, 1])
+                                  [0  0
+                                   1  0],
+                                  [1//2, 1//2]',
+                                  [0, 1])
 
 const bt_rk4 = TableauRKExplicit(:rk4,(4,),Rational{Int64},
-                          [0 0 0 0
-                           1//2 0 0 0
-                           0 1//2 0 0
-                           0 0 1 0],
-                         [1//6, 1//3, 1//3, 1//6]',
-                         [0, 1//2, 1//2, 1])
+                                 [0    0    0 0
+                                  1//2 0    0 0
+                                  0    1//2 0 0
+                                  0    0    1 0],
+                                 [1//6, 1//3, 1//3, 1//6]',
+                                 [0, 1//2, 1//2, 1])
 
 # Adaptive step:
 
@@ -136,18 +136,18 @@ const bt_dopri5 = TableauRKExplicit(:dopri, (5,4), Rational{Int64},
 # Values from pag. 65, Fehlberg, Erwin. "Classical fifth-, sixth-, seventh-, and eighth-order Runge-Kutta formulas with stepsize control".
 # National Aeronautics and Space Administration.
 const bt_feh78 = TableauRKExplicit(:feh78, (7,8), Rational{Int64},
-                            [     0      0      0       0        0         0       0       0     0      0    0 0 0
-                                  2//27   0      0       0        0         0       0       0     0      0    0 0 0
-                                  1//36   1//12   0       0        0         0       0       0     0      0    0 0 0
-                                  1//24   0      1//8     0        0         0       0       0     0      0    0 0 0
-                                  5//12   0    -25//16   25//16     0         0       0       0     0      0    0 0 0
-                                  1//20   0      0       1//4      1//5       0       0       0     0      0    0 0 0
-                                -25//108  0      0     125//108  -65//27    125//54    0       0     0      0    0 0 0
-                                 31//300  0      0       0       61//225    -2//9    13//900   0     0      0    0 0 0
-                                  2      0      0     -53//6    704//45   -107//9    67//90    3     0      0    0 0 0
-                                -91//108  0      0      23//108 -976//135   311//54  -19//60   17//6  -1//12   0    0 0 0
+                            [     0       0      0       0         0          0        0        0      0       0     0 0 0
+                                  2//27   0      0       0         0          0        0        0      0       0     0 0 0
+                                  1//36   1//12  0       0         0          0        0        0      0       0     0 0 0
+                                  1//24   0      1//8    0         0          0        0        0      0       0     0 0 0
+                                  5//12   0    -25//16  25//16     0          0        0        0      0       0     0 0 0
+                                  1//20   0      0       1//4      1//5       0        0        0      0       0     0 0 0
+                                -25//108  0      0     125//108  -65//27    125//54    0        0      0       0     0 0 0
+                                 31//300  0      0       0       61//225    -2//9     13//900   0      0       0     0 0 0
+                                  2       0      0     -53//6    704//45   -107//9    67//90    3      0       0     0 0 0
+                                -91//108  0      0      23//108 -976//135   311//54  -19//60   17//6  -1//12   0     0 0 0
                                2383//4100 0      0    -341//164 4496//1025 -301//82 2133//4100 45//82 45//164 18//41 0 0 0
-                                  3//205  0      0       0        0        -6//41   -3//205  -3//41  3//41   6//41 0 0 0
+                                  3//205  0      0       0        0        -6//41     -3//205  -3//41  3//41   6//41 0 0 0
                               -1777//4100 0      0    -341//164 4496//1025 -289//82 2193//4100 51//82 33//164 12//41 0 1 0],
                               [41//840 0 0 0 0 34//105 9//35 9//35 9//280 9//280 41//840 0 0
                                0 0 0 0 0 34//105 9//35 9//35 9//280 9//280 0     41//840 41//840],
@@ -189,8 +189,6 @@ function make_consistent_types(fn, y0, tspan, btab)
     # Ebt = Tableau{_,_,Ebt}
     #
     # Returns
-    # - Ar: Container type to be used for ys and various work arrays
-    #       (needs to be 1D and 2D capable, and hold Ey and Ef types)
     # - Et: eltype of time, needs to be a real "continuous" type
     # - Ey: eltype of y
     # - Ef: eltype of fn(t,y)
@@ -200,7 +198,6 @@ function make_consistent_types(fn, y0, tspan, btab)
     # Issues:
     # - Julia cannot infer the type of Ar, thus this is not type-stable
 
-    Ar = ar_type(y0)
     Ty, Ey = typeof(y0), typeof(y0[1]/(tspan[end]-tspan[1]))
 
     ## TODO:
@@ -220,7 +217,7 @@ function make_consistent_types(fn, y0, tspan, btab)
 
     btab_ = convert(Et, btab)
     # only return needed types
-    return Ar, Et, Ey, Ef, btab_
+    return Et, Ey, Ef, btab_
 end
 make_array_type(Ty::Type) = Ty.name.primary
 
@@ -230,27 +227,20 @@ function oderk_fixed(fn, y0, tspan, btab::TableauRKExplicit)
     # Non-arrays y0 treat as scalar
     fn_ = (t, y) -> fn(t, y[1])
     t,y = oderk_fixed(fn_, [y0], tspan, btab)
-    return t,vcat(y...)
+    return t,y[:]
 end
 function oderk_fixed{N,S}(fn, y0::AbstractVector, tspan,
                           btab_::TableauRKExplicit{N,S})
-    Ar, Et, Ey, Ef, btab = make_consistent_types(fn, y0, tspan, btab_)
+    Et, Ey, Ef, btab = make_consistent_types(fn, y0, tspan, btab_)
     
     dof = length(y0)
     tsteps = length(tspan)
-    ys = Ar(Ey, dof, tsteps)
+    ys = similar(y0, Ey, dof, tsteps)
     ys[:,1] = y0
     tspan = convert(Vector{Et}, tspan)
     # work arrays:
-    ks = Ar(Ef, dof, S)
-    ytmp = Ar(Ey, dof)
-    # time stepping: (a function-call is needed for type inference)
-    oderk_fixed_kernel!(ys, ks, ytmp, fn, tspan, dof, btab) 
-    return tspan, transformys(ys)
-end
-function oderk_fixed_kernel!{N,S}(ys, ks, ytmp, fn, tspan, dof,
-                                  btab::TableauRKExplicit{N,S})
-    # updates ys and uses ks, ytmp as work arrays
+    ks = similar(y0, Ef, dof, S)
+    ytmp = similar(y0, Ey, dof)
     for i=1:length(tspan)-1
         dt = tspan[i+1]-tspan[i]
         ys[:,i+1] = ys[:,i] # this also allocates a bit...
@@ -264,7 +254,28 @@ function oderk_fixed_kernel!{N,S}(ys, ks, ytmp, fn, tspan, dof,
             end
         end
     end
+    # time stepping: (a function-call is needed for type inference)
+    # updates ys and uses ks, ytmp as work arrays
+#    oderk_fixed_kernel!(ys, ks, ytmp, fn, tspan, dof, btab) 
+    return tspan, ys
 end
+# function oderk_fixed_kernel!{N,S}(ys, ks, ytmp, fn, tspan, dof,
+#                                   btab::TableauRKExplicit{N,S})
+#     # updates ys and uses ks, ytmp as work arrays
+#     for i=1:length(tspan)-1
+#         dt = tspan[i+1]-tspan[i]
+#         ys[:,i+1] = ys[:,i] # this also allocates a bit...
+#         for s=1:S
+#             for d=1:dof
+#                 ytmp[d] = ys[d,i] # ytmp[:] = ys[:,i] allocates!
+#             end
+#             calc_next_k!(ks, ytmp, ytmp, s, fn, tspan[i], dt, dof, btab)
+#             for d=1:dof
+#                 ys[d,i+1] += dt * btab.b[s]*ks[d,s]
+#             end
+#         end
+#     end
+# end
 
 # calculates k[s]
 function calc_next_k!{N,S}(ks::Matrix, ytmp::Vector, y, s, fn, t, dt, dof, btab::TableauRKExplicit{N,S})
@@ -286,11 +297,10 @@ ode2_heun(fn, y0, tspan) = oderk_fixed(fn, y0, tspan, bt_heun)
 
 # Adaptive ODE time stepper
 function ode_adapt(fn, y0, tspan, btab::Tableau; kwords...)
-    @show "scalar"
     # For y0 which don't support indexing.
     fn_ = (t, y) -> fn(t, y[1])
     t,y = ode_adapt(fn_, [y0], tspan, btab; kwords...)
-    return t, vcat(y...)
+    return t, y[:]
 end
 function ode_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::Tableau{N,S};
                           reltol = 1.0e-5, abstol = 1.0e-8,
@@ -302,10 +312,9 @@ function ode_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::Tableau{N,S};
                           )
     # For y0 which support indexing.  Currently y0<:AbstractVector but
     # that could be relaxed with a Holy-trait.
-    
     !isadaptive(btab_) && error("Can only use this solver with an adaptive RK Butcher table")
 
-    Ar, Et, Ey, Ef, btab = make_consistent_types(fn, y0, tspan, btab_)
+    Et, Ey, Ef, btab = make_consistent_types(fn, y0, tspan, btab_)
     # parameters
     order = minimum(btab.order)
 
@@ -317,24 +326,24 @@ function ode_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::Tableau{N,S};
     tend = tspan[end]
 
     # work arrays:
-    y = Ar(Ey, dof)      # y at time t
-    y[:] = y0
-    ytrial = Ar(Ey, dof) # trial solution at time t+dt
-    yerr   = Ar(Ey, dof) # error of trial solution
-    ks     = Ar(Ey, dof, S)
-    ytmp   = Ar(Ey, dof)
-    f0     = Ar(Ey, dof) # TODO: remove if ks becomes Vector{Vector}
-    f1     = Ar(Ey, dof) # TODO: remove too
+    y      = similar(y0, Ey, dof)      # y at time t
+    y[:]   = y0
+    ytrial = similar(y0, Ey, dof) # trial solution at time t+dt
+    yerr   = similar(y0, Ey, dof) # error of trial solution
+    ks     = similar(y0, Ey, dof, S)
+    ytmp   = similar(y0, Ey, dof)
+    f0     = similar(y0, Ey, dof) # TODO: remove if ks becomes Vector{Vector}
+    f1     = similar(y0, Ey, dof) # TODO: remove too
 
     # If tspan is a more than a length two vector: return solution at
     # those points only
     if points==:specified
         nsteps = length(tspan)
-        ys = Ar(Ey, dof, nsteps)
+        ys = similar(y0, Ey, dof, nsteps)
         ys[:,1] = y
         tspan_fixed = []
     elseif points==:all
-        ys = Ar(Ey, 0)
+        ys = similar(y0, Ey, 0)
         append!(ys, y)
         nsteps = length(tspan)
         tspan_fixed = tspan
@@ -352,26 +361,6 @@ function ode_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::Tableau{N,S};
     errs = Float64[]
     steps = [0,0]  # [accepted, rejected]
 
-    # calling into a kernel function which does the heavy lifting.
-    # This is necessary as the type of Ar cannot be inferred by Julia,
-    # thus creating a method-boundary here:
-    ode_adapt_kernel!(ys, ytrial, yerr, ks, ytmp, y, t, dt, fn, dof, btab,
-                      tdir, tstart, tend, steps, dts, errs, order, f0, f1,
-                      nsteps, tspan, tspan_fixed,
-                      # kwords
-                      reltol, abstol, minstep, maxstep, initstep, points)
-    #    @show steps
-    if points==:all
-        ys = reshape(ys, dof, length(tspan))
-    end
-    return tspan, transformys(ys)
-end
-# The kernel does the actual time stepping:
-function ode_adapt_kernel!{N,S}(ys, ytrial, yerr, ks, ytmp, y, t, dt, fn, dof, btab::Tableau{N,S},
-                           tdir, tstart, tend, steps, dts, errs, order, f0, f1,
-                           nsteps, tspan, tspan_fixed,
-                           #kwords
-                           reltol, abstol, minstep, maxstep, initstep, points)
     timeout_const = 5 # after step reduction do not increase step for
                       # timeout_const steps
 
@@ -440,7 +429,14 @@ function ode_adapt_kernel!{N,S}(ys, ytrial, yerr, ks, ytmp, y, t, dt, fn, dof, b
             timeout = timeout_const
         end
     end
+    
+    #    @show steps
+    if points==:all
+        ys = reshape(ys, dof, length(tspan))
+    end
+    return tspan, ys
 end
+
 # Does one embedded R-K step updating ytrial, yerr and ks.
 function rk_embedded_step!{N,S}(ytrial, yerr, ks, ytmp, y, fn, t, dt, dof, btab::TableauRKExplicit{N,S})
     # Assumes that ks[:,1] is already calculated!
@@ -528,7 +524,7 @@ ode78_v2(fn, y0, tspan; kwargs...) = ode_adapt(fn, y0, tspan, bt_feh78; kwargs..
 
 ####
 function hinit_vec(F_, x0, t0, tend, p, reltol, abstol)
-    # a hack, update to do component-wise
+    # a hack, update to do component-wise (TODO)
     if length(x0)==1
         x0 = x0[1]
         F = (t,x) -> F_(t,[x])

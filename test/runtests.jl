@@ -26,7 +26,10 @@ solvers = [
     ODE.ode4s_kr,
 
     ODE.ode78_fb]
-
+    solver=1
+    ys = 1
+    t = 1
+    y=1
 for solver in solvers
     println("using $solver")
     # dy
@@ -56,8 +59,9 @@ for solver in solvers
     #
     # y = [v, w]
     t,y=solver((t,y)->[-y[2]; y[1]], [1., 2.], [0:.001:2*pi;])
-    ys = hcat(y...).'   # convert Vector{Vector{Float}} to Matrix{Float}
-    @test maximum(abs(ys-[cos(t)-2*sin(t) 2*cos(t)+sin(t)])) < tol
+    # convert Vector{Vector{Float}} to Matrix{Float}
+    ys = eltype(y)<:Vector ?  hcat(y...) : y
+    @test maximum(abs(ys-[cos(t)-2*sin(t) 2*cos(t)+sin(t)].')) < tol
 end
 
 # rober testcase from http://www.unige.ch/~hairer/testset/testset.html
