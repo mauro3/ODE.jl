@@ -207,6 +207,15 @@ function allocate!{T<:AbstractVector}(vec::Vector{T}, y0, dof)
         vec[s] = similar(y0, eltype(T), dof)
     end
 end
+function index_or_push!(vec, i, val)
+    # Fills in the vector until there is no space, then push!
+    if length(vec)>=i
+        vec[i] = val
+    else
+        push!(vec, val)
+    end
+end
+
 ######
 # Fixed step Runge-Kutta method
 # TODO: iterator method
@@ -231,7 +240,7 @@ function oderk_fixed{N,S}(fn, y0::AbstractVector, tspan,
     tspan = convert(Vector{Et}, tspan)
     # work arrays:
     ks = Array(Ty, S)
-    # allocate!(ks, dof) # no need to allocate as fn is not in-place
+    # allocate!(ks, y0, dof) # no need to allocate as fn is not in-place
     ytmp = similar(y0, Eyf, dof)
     for i=1:length(tspan)-1
         dt = tspan[i+1]-tspan[i]
@@ -245,7 +254,6 @@ function oderk_fixed{N,S}(fn, y0::AbstractVector, tspan,
     end
     return tspan, ys
 end
-# isa(ks, Vector) version:
 function calc_next_k!{Ty}(ks::Vector, ytmp::Ty, y, s, fn, t, dt, dof, btab)
     # Calculates the next ks and puts it into ks[s]
     # - ks and ytmp are modified inside this function.
@@ -254,48 +262,6 @@ function calc_next_k!{Ty}(ks::Vector, ytmp::Ty, y, s, fn, t, dt, dof, btab)
         ytmp[d] += dt * ks[ss][d] * btab.a[s,ss]
     end
     ks[s] = fn(t + btab.c[s]*dt, ytmp)::Ty
-    nothing
-end
-
-# function oderk_fixed{N,S}(fn, y0::AbstractMatrix, tspan,
-#                           btab_::TableauRKExplicit{N,S})
-#     # TODO: instead of AbstractVector use a Holy-trait
-#     Et, Eyf, Ef, btab = make_consistent_types(fn, y0, tspan, btab_)
-#     dof = length(y0)
-#     tsteps = length(tspan)
-#     ys = similar(y0, Eyf, dof, tsteps)
-#     ys[:,1] = y0
-#     tspan = convert(Vector{Et}, tspan)
-#     # work arrays:
-#     ks = similar(y0, Ef, dof, S)
-#     ytmp = similar(y0, Eyf, dof)
-#     for i=1:length(tspan)-1
-#         dt = tspan[i+1]-tspan[i]
-#         for d=1:dof
-#             ys[d,i+1] = ys[d,i]
-#         end
-#         for s=1:S
-#             for d=1:dof
-#                 ytmp[d] = ys[d,i]
-#             end
-#             calc_next_k!(ks, ytmp, ytmp, s, fn, tspan[i], dt, dof, btab)
-#             for d=1:dof
-#                 ys[d,i+1] += dt * btab.b[s]*ks[d,s]
-#             end
-#         end
-#     end
-#     return tspan, ys
-# end
-
-# calculates k[s]
-function calc_next_k!{N,S,Ty}(ks::Matrix, ytmp::Ty, y, s, fn, t, dt, dof, btab::TableauRKExplicit{N,S})
-    # Calculates the next ks and puts it into ks[:,s]
-    # - ks and ytmp are modified inside this function.
-    ytmp[:] = y
-    for ss=1:s-1, d=1:dof
-        ytmp[d] += dt * ks[d,ss] * btab.a[s,ss]
-    end
-    ks[:,s] = fn(t + btab.c[s]*dt, ytmp)::Ty
     nothing
 end
 
@@ -310,7 +276,7 @@ function oderk_adapt(fn, y0, tspan, btab::TableauRKExplicit; kwords...)
     # For y0 which don't support indexing.
     fn_ = (t, y) -> [fn(t, y[1])]
     t,y = oderk_adapt(fn_, [y0], tspan, btab; kwords...)
-    return t, y[:]
+    return t, vcat_nosplat(y)
 end
 function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplicit{N,S};
                           reltol = 1.0e-5, abstol = 1.0e-8,
@@ -342,28 +308,29 @@ function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplici
     y[:]   = y0
     ytrial = similar(y0, Eyf, dof) # trial solution at time t+dt
     yerr   = similar(y0, Eyf, dof) # error of trial solution
-    ks     = similar(y0, Eyf, dof, S)
+    ks = Array(Ty, S)
+    # allocate!(ks, y0, dof) # no need to allocate as fn is not in-place
     ytmp   = similar(y0, Eyf, dof)
     f0     = similar(y0, Eyf, dof)
     f1     = similar(y0, Eyf, dof)
 
+    # output ys
+    nsteps_fixed = length(tspan) # these are always output
+    ys = Array(Ty, nsteps_fixed)
+    allocate!(ys, y0, dof)
+    ys[1] = y0
+    
     # Option points determines where solution is returned:
-    if points==:specified
-        nsteps = length(tspan)
-        ys = similar(y0, Eyf, dof, nsteps)
-        ys[:,1] = y
-        tspan_fixed = []
-    elseif points==:all
-        ys = similar(y0, Eyf, 0)
-        append!(ys, y)
-        nsteps = length(tspan)
+    if points==:all
         tspan_fixed = tspan
         tspan = Et[tstart]
-    else
+        iter_fixed = 2 # index into tspan_fixed
+        sizehint(tspan, nsteps_fixed)
+    elseif points!=:specified
         error("Unrecognized option points==$points")
     end
     # Time
-    dt, tdir, ks[:,1] = hinit_vec(fn, y, tstart, tend, order, reltol, abstol) # ks[:,1]==f0
+    dt, tdir, ks[1] = hinit(fn, y, tstart, tend, order, reltol, abstol) # ks[:,1]==f0
     if initstep!=0
         dt = sign(initstep)==tdir ? initstep : error("initstep has wrong sign.")
     end
@@ -375,11 +342,10 @@ function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplici
     ## Integration loop
     laststep = false
     timeout = 0 # for step-control
-    iter = 2 # the index into tspan/tspan_fixed
+    iter = 2 # the index into tspan and ys
     while true
-        # do one step (assumes ks[:,1]==f0)
+        # do one step (assumes ks[1]==f0)
         rk_embedded_step!(ytrial, yerr, ks, ytmp, y, fn, t, dt, dof, btab)
-
         # Check error and find a new step size:
         err, newdt, timeout = stepsize_hw92(dt, tdir, y, ytrial, yerr, abstol,
                                             reltol, order, timeout, dof, maxstep)
@@ -391,26 +357,29 @@ function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplici
             push!(errs, err)
 
             # Output:
-            f0[:] = ks[:, 1]
-            f1[:] = isFSAL(btab) ? ks[:,S] : fn(t+dt, ytrial)
+            f0[:] = ks[1]
+            f1[:] = isFSAL(btab) ? ks[S] : fn(t+dt, ytrial)
             if points==:specified
                 # interpolate onto given output points
-                while iter-1<nsteps && (tdir*tspan[iter]<tdir*(t+dt) || laststep) # output at all new times which are < t+dt
-                    hermite_interp!(ys, iter, tspan[iter], t, dt, y, ytrial, f0, f1) # TODO: 3rd order only!
+                while iter-1<nsteps_fixed && (tdir*tspan[iter]<tdir*(t+dt) || laststep) # output at all new times which are < t+dt
+                    hermite_interp!(ys[iter], tspan[iter], t, dt, y, ytrial, f0, f1) # TODO: 3rd order only!
                     iter += 1
                 end
             else
                 # first interpolate onto given output points
-                while iter-1<nsteps && tdir*t<tdir*tspan_fixed[iter]<tdir*(t+dt) # output at all new times which are < t+dt
-                    append!(ys, hermite_interp(tspan_fixed[iter], t, dt, y, ytrial, f0, f1)) # TODO: 3rd order only!
-                    push!(tspan, tspan_fixed[iter])
+                while iter_fixed-1<nsteps_fixed && tdir*t<tdir*tspan_fixed[iter_fixed]<tdir*(t+dt) # output at all new times which are < t+dt
+                    yout = hermite_interp(tspan_fixed[iter_fixed], t, dt, y, ytrial, f0, f1)
+                    index_or_push!(ys, iter, yout) # TODO: 3rd order only!
+                    push!(tspan, tspan_fixed[iter_fixed])
+                    iter_fixed += 1
                     iter += 1
                 end
                 # but also output every step taken
-                append!(ys, ytrial)
+                index_or_push!(ys, iter, copy(ytrial))
                 push!(tspan, t+dt)
+                iter += 1
             end
-            ks[:,1] = f1 # load ks[:,1] for next step
+            ks[1] = f1 # load ks[:,1] for next step
 
             # Break if this was the last step:
             laststep && break
@@ -437,11 +406,6 @@ function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplici
             timeout = timeout_const
         end
     end
-
-    #    @show steps
-    if points==:all
-        ys = reshape(ys, dof, length(tspan))
-    end
     return tspan, ys
 end
 
@@ -453,14 +417,14 @@ function rk_embedded_step!{N,S}(ytrial, yerr, ks, ytmp, y, fn, t, dt, dof, btab:
     ytrial[:] = zero(eltype(ytrial))
     yerr[:] = zero(eltype(ytrial))
     for d=1:dof
-        ytrial[d] += btab.b[1,1]*ks[d,1]
-        yerr[d]   += btab.b[2,1]*ks[d,1]
+        ytrial[d] += btab.b[1,1]*ks[1][d]
+        yerr[d]   += btab.b[2,1]*ks[1][d]
     end
     for s=2:S
         calc_next_k!(ks, ytmp, y, s, fn, t, dt, dof, btab)
         for d=1:dof
-            ytrial[d] += btab.b[1,s]*ks[d,s]
-            yerr[d]   += btab.b[2,s]*ks[d,s]
+            ytrial[d] += btab.b[1,s]*ks[s][d]
+            yerr[d]   += btab.b[2,s]*ks[s][d]
         end
 
     end
@@ -508,59 +472,23 @@ function stepsize_hw92(dt, tdir, x0, xtrial, xerr, abstol, reltol, order,
 end
 
 # For dense output see Hairer & Wanner p.190 using Hermite interpolation
-function hermite_interp!(ys, iter, tquery,t,dt,y0,y1,f0,f1)
+function hermite_interp!(y, tquery,t,dt,y0,y1,f0,f1)
     # f_0 = f(x_0 , y_0) , f_1 = f(x_0 + h, y_1 )
     # this is O(3). TODO for higher order.
     #
-    # Updates ys[:,iter] in-place
+    # Updates y in-place
     theta = (tquery-t)/dt
     for i=1:length(y0)
-        ys[i,iter] = ((1-theta)*y0[i] + theta*y1[i] + theta*(theta-1) *
-                      ((1-2*theta)*(y1[i]-y0[i]) + (theta-1)*dt*f0[i] + theta*dt*f1[i]) )
+        y[i] = ((1-theta)*y0[i] + theta*y1[i] + theta*(theta-1) *
+                ((1-2*theta)*(y1[i]-y0[i]) + (theta-1)*dt*f0[i] + theta*dt*f1[i]) )
     end
     nothing
 end
 function hermite_interp(tquery,t,dt,y0,y1,f0,f1)
     y = similar(y0)
-    hermite_interp!(y, 1, tquery,t,dt,y0,y1,f0,f1)
+    hermite_interp!(y,tquery,t,dt,y0,y1,f0,f1)
     return y
 end
-
-#### TODO tidy this up:
-function hinit_vec(F_, x0, t0, tend, p, reltol, abstol)
-    # a hack, update to do component-wise (TODO)
-    if length(x0)==1
-        x0 = x0[1]
-        F = (t,x) -> F_(t,[x])
-    else
-        F = F_
-    end
-
-    tdir = sign(tend-t0)
-    tdir==0 && error("Zero time span")
-    tau = max(reltol*norm(x0, Inf), abstol)
-    d0 = norm(x0, Inf)/tau
-    f0 = F(t0, x0)
-    d1 = norm(f0, Inf)/tau
-    if d0 < 1e-5 || d1 < 1e-5
-        h0 = 1e-6
-    else
-        h0 = 0.01*(d0/d1)
-    end
-    # perform Euler step
-    x1 = x0 + tdir*h0*f0
-    f1 = F(t0 + tdir*h0, x1)
-    # estimate second derivative
-    d2 = norm(f1 - f0, Inf)/(tau*h0)
-    if max(d1, d2) <= 1e-15
-        h1 = max(1e-6, 1e-3*h0)
-    else
-        pow = -(2. + log10(max(d1, d2)))/(p + 1.)
-        h1 = 10.^pow
-    end
-    return tdir*min(100*h0, h1), tdir, f0
-end
-
 
 ode45_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_rk45; kwargs...)
 ode54_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_dopri5; kwargs...)
