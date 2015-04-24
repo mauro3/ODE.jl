@@ -14,6 +14,7 @@ solvers = [
     ODE.ode45_ck,
 #new:
     ODE.ode4_v2,
+    ODE.ode21_v2,
     ODE.ode45_v2,
     ODE.ode54_v2,
     ODE.ode78_v2,

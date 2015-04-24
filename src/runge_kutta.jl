@@ -1,7 +1,51 @@
 using Compat
 
+function make_consistent_types(fn, y0, tspan, btab)
+    # There are a few types involved in a call to a ODE solver which
+    # somehow need to be consistent:
+    #
+    # Et = eltype(tspan)
+    # Ey = eltype(y0)
+    # Ef = eltype(Tf)
+    #
+    # There are also the types of the containers, but they are not
+    # needed as `similar` is used to make containers.
+    # Tt = typeof(tspan)
+    # Ty = typeof(y0)              # note, this can be a scalar
+    # Tf = typeof(F(tspan(1),y0))  # note, this can be a scalar
+    #
+    # Returns
+    # - Et: eltype of time, needs to be a real "continuous" type, at
+    #       the moment a FloatingPoint
+    # - Eyf: suitable eltype of y and f(t,y)
+    #   --> both of these are set to typeof(y0[1]/tspan[1])
+    # - Ty: container type of y0
+    # - btab: tableau with entries converted to Et
+
+    Ty = typeof(y0)
+    Eyf = typeof(y0[1]/(tspan[end]-tspan[1]))
+
+    Et = eltype(tspan)
+    @assert Et<:Real
+    if !(Et<:FloatingPoint)
+        Et = promote_type(Et, Float64)
+    end
+
+    # if all are Floats, make them the same
+    if Et<:FloatingPoint &&  Eyf<:FloatingPoint
+        Et = promote_type(Et, Eyf)
+        Eyf = Et
+    end
+
+    !isleaftype(Et) && warn("The eltype(tspan) is not a concrete type!  Change type of tspan for better performance.")
+    !isleaftype(Eyf) && warn("The eltype infered from y0/tspan[1] is not a concrete type!  Change type of y0 and/or tspan for better performance.")
+
+    btab_ = convert(Et, btab)
+    return Et, Eyf, Ty, btab_
+end
+
 ###################
-# Butcher Tableaus
+# Butcher Tableaus, or more generally coefficient tables
 # see Hairer & Wanner 1992, p. 134, 166
 
 abstract Tableau{Name, S, T<:Real}
@@ -104,6 +148,13 @@ const bt_rk4 = TableauRKExplicit(:rk4,(4,),Rational{Int64},
                                  [0, 1//2, 1//2, 1])
 
 # Adaptive step:
+# Heun Euler https://en.wikipedia.org/wiki/Runge–Kutta_methods
+const bt_rk21 = TableauRKExplicit(:heun_euler,(2,1), Rational{Int64},
+                                  [0     0
+                                   1     0],
+                                  [1//2  1//2
+                                   1     0],
+                                  [0,    1])
 
 # Fehlberg https://en.wikipedia.org/wiki/Runge%E2%80%93Kutta%E2%80%93Fehlberg_method
 const bt_rk45 = TableauRKExplicit(:fehlberg,(4,5),Rational{Int64},
@@ -116,8 +167,6 @@ const bt_rk45 = TableauRKExplicit(:fehlberg,(4,5),Rational{Int64},
                            [25//216      0        1408//2565   2197//4104  -1//5  0
                             16//135      0        6656//12825 28561//56430 -9//50 2//55],
                             [0,          1//4,       3//8,       12//13,    1,    1//2])
-
-
 
 # Dormand-Prince https://en.wikipedia.org/wiki/Dormand%E2%80%93Prince_method
 const bt_dopri5 = TableauRKExplicit(:dopri, (5,4), Rational{Int64},
@@ -160,83 +209,30 @@ const bt_feh78 = TableauRKExplicit(:feh78, (7,8), Rational{Int64},
 # Runge-Kutta solvers
 # (Hairer & Wanner 1992 p.134, p.165-169)
 
-function make_consistent_types(fn, y0, tspan, btab)
-    # There are a few types involved which somehow need to be consistent:
-    #
-    # Et = eltype(tspan)
-    # Ey = eltype(y0)
-    # Ef = eltype(Tf)
-    #
-    # There are also the types of the containers, but they are not
-    # needed as `similar` is used to make containers.
-    # Tt = typeof(tspan)
-    # Ty = typeof(y0)              # note, this can be a scalar
-    # Tf = typeof(F(tspan(1),y0))  # note, this can be a scalar
-    #
-    # Returns
-    # - Et: eltype of time, needs to be a real "continuous" type, at
-    #       the moment a FloatingPoint
-    # - Eyf: suitable eltype of y and f(t,y)
-    #   --> both of these are set to typeof(y0[1]/tspan[1])
-    # - Ty: container type of y0
-    # - btab: tableau with entries converted to Et
-
-    Ty = typeof(y0)
-    Eyf = typeof(y0[1]/(tspan[end]-tspan[1]))
-
-    Et = eltype(tspan)
-    @assert Et<:Real
-    if !(Et<:FloatingPoint)
-        Et = promote_type(Et, Float64)
-    end
-
-    # if all are Floats, make them the same
-    if Et<:FloatingPoint &&  Eyf<:FloatingPoint
-        Et = promote_type(Et, Eyf)
-        Eyf = Et
-    end
-
-    !isleaftype(Et) && warn("The eltype(tspan) is not a concrete type!  Change type of tspan for better performance.")
-    !isleaftype(Eyf) && warn("The eltype infered from y0/tspan[1] is not a concrete type!  Change type of y0 and/or tspan for better performance.")
-
-    btab_ = convert(Et, btab)
-    return Et, Eyf, Ty, btab_
-end
-function allocate!{T<:AbstractVector}(vec::Vector{T}, y0, dof)
-    for s=1:length(vec)
-        vec[s] = similar(y0, eltype(T), dof)
-    end
-end
-function index_or_push!(vec, i, val)
-    # Fills in the vector until there is no space, then push!
-    if length(vec)>=i
-        vec[i] = val
-    else
-        push!(vec, val)
-    end
-end
-
 ######
 # Fixed step Runge-Kutta method
 # TODO: iterator method
+ode4_v2(fn, y0, tspan) = oderk_fixed(fn, y0, tspan, bt_rk4)
+ode1_euler(fn, y0, tspan) = oderk_fixed(fn, y0, tspan, bt_feuler)
+ode2_midpoint(fn, y0, tspan) = oderk_fixed(fn, y0, tspan, bt_midpoint)
+ode2_heun(fn, y0, tspan) = oderk_fixed(fn, y0, tspan, bt_heun)
+
 function oderk_fixed(fn, y0, tspan, btab::TableauRKExplicit)
     # Non-arrays y0 treat as scalar
     fn_(t, y) = [fn(t, y[1])]
     t,y = oderk_fixed(fn_, [y0], tspan, btab)
     return t, vcat_nosplat(y)
 end
-vcat_nosplat(y) =  eltype(y[1])[el[1] for el in y]
 function oderk_fixed{N,S}(fn, y0::AbstractVector, tspan,
                           btab_::TableauRKExplicit{N,S})
     # TODO: instead of AbstractVector use a Holy-trait
     Et, Eyf, Ty, btab = make_consistent_types(fn, y0, tspan, btab_)
     dof = length(y0)
-    tsteps = length(tspan)
 
-    ys = Array(Ty, tsteps)
+    ys = Array(Ty, length(tspan))
     allocate!(ys, y0, dof)
     ys[1] = copy(y0)
-    
+
     tspan = convert(Vector{Et}, tspan)
     # work arrays:
     ks = Array(Ty, S)
@@ -254,24 +250,14 @@ function oderk_fixed{N,S}(fn, y0::AbstractVector, tspan,
     end
     return tspan, ys
 end
-function calc_next_k!{Ty}(ks::Vector, ytmp::Ty, y, s, fn, t, dt, dof, btab)
-    # Calculates the next ks and puts it into ks[s]
-    # - ks and ytmp are modified inside this function.
-    ytmp[:] = y
-    for ss=1:s-1, d=1:dof
-        ytmp[d] += dt * ks[ss][d] * btab.a[s,ss]
-    end
-    ks[s] = fn(t + btab.c[s]*dt, ytmp)::Ty
-    nothing
-end
-
-ode4_v2(fn, y0, tspan) = oderk_fixed(fn, y0, tspan, bt_rk4)
-ode1_euler(fn, y0, tspan) = oderk_fixed(fn, y0, tspan, bt_feuler)
-ode2_midpoint(fn, y0, tspan) = oderk_fixed(fn, y0, tspan, bt_midpoint)
-ode2_heun(fn, y0, tspan) = oderk_fixed(fn, y0, tspan, bt_heun)
 
 
 # Adaptive ODE time stepper
+ode21_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_rk21; kwargs...)
+ode45_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_rk45; kwargs...)
+ode54_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_dopri5; kwargs...)
+ode78_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_feh78; kwargs...)
+
 function oderk_adapt(fn, y0, tspan, btab::TableauRKExplicit; kwords...)
     # For y0 which don't support indexing.
     fn_ = (t, y) -> [fn(t, y[1])]
@@ -319,7 +305,7 @@ function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplici
     ys = Array(Ty, nsteps_fixed)
     allocate!(ys, y0, dof)
     ys[1] = y0
-    
+
     # Option points determines where solution is returned:
     if points==:all
         tspan_fixed = tspan
@@ -347,8 +333,8 @@ function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplici
         # do one step (assumes ks[1]==f0)
         rk_embedded_step!(ytrial, yerr, ks, ytmp, y, fn, t, dt, dof, btab)
         # Check error and find a new step size:
-        err, newdt, timeout = stepsize_hw92(dt, tdir, y, ytrial, yerr, abstol,
-                                            reltol, order, timeout, dof, maxstep)
+        err, newdt, timeout = stepsize_hw92!(dt, tdir, y, ytrial, yerr, order, timeout,
+                                            dof, abstol, reltol, maxstep)
 
         if err<=1.0 # accept step
             # diagnostics
@@ -409,8 +395,59 @@ function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplici
     return tspan, ys
 end
 
-# Does one embedded R-K step updating ytrial, yerr and ks.
+function calc_next_k!{Ty}(ks::Vector, ytmp::Ty, y, s, fn, t, dt, dof, btab)
+    # Calculates the next ks and puts it into ks[s]
+    # - ks and ytmp are modified inside this function.
+    ytmp[:] = y
+    for ss=1:s-1, d=1:dof
+        ytmp[d] += dt * ks[ss][d] * btab.a[s,ss]
+    end
+    ks[s] = fn(t + btab.c[s]*dt, ytmp)::Ty
+    nothing
+end
+
+function stepsize_hw92!(dt, tdir, x0, xtrial, xerr, order,
+                       timeout, dof, abstol, reltol, maxstep)
+    # Estimates the error and a new step size following Hairer &
+    # Wanner 1992, p167 (with some modifications)
+    #
+    # If timeout>0 no step size increase is allowed, timeout is
+    # decremented in here.
+    #
+    # Returns the error, newdt and the number of timeout-steps
+    #
+    # TODO:
+    # - allow component-wise reltol and abstol?
+    # - allow other norms
+
+    # Needed interface:
+    # On components: isnan, norm
+    # On container: norm, get/setindex
+
+    timout_after_nan = 5
+    fac = [0.8, 0.9, 0.25^(1/(order+1)), 0.38^(1/(order+1))][1]
+    facmax = 5.0 # maximal step size increase. 1.5-5
+    facmin = 1./facmax  # maximal step size decrease. ?
+
+    # in-place calculate xerr./tol
+    for d=1:dof
+        # if NaN present make step size smaller by maximum
+        isnan(xtrial[d]) && return 10., dt*facmin, timout_after_nan
+
+        xerr[d] = xerr[d]/(abstol + max(norm(x0[d]), norm(xtrial[d]))*reltol) # Eq 4.10
+    end
+    err = norm(xerr, 2) # Eq. 4.11
+    newdt = min(maxstep, tdir*dt*max(facmin, fac*(1/err)^(1/(order+1)))) # Eq 4.13 modified
+    if timeout>0
+        newdt = min(newdt, dt)
+        timeout -= 1
+    end
+    return err, tdir*newdt, timeout
+end
+
 function rk_embedded_step!{N,S}(ytrial, yerr, ks, ytmp, y, fn, t, dt, dof, btab::TableauRKExplicit{N,S})
+    # Does one embedded R-K step updating ytrial, yerr and ks.
+    #
     # Assumes that ks[:,1] is already calculated!
     #
     # Modifies ytrial, yerr, ks, and ytmp
@@ -435,48 +472,31 @@ function rk_embedded_step!{N,S}(ytrial, yerr, ks, ytmp, y, fn, t, dt, dof, btab:
 end
 
 # Helper functions:
-function stepsize_hw92(dt, tdir, x0, xtrial, xerr, abstol, reltol, order,
-                       timeout, dof, maxstep)
-    # Estimates new best step size following
-    # Hairer & Wanner 1992, p167 (with some modifications)
-    #
-    # If timeout>0 no step size increase is allowed.
-
-    # TODO:
-    #  - parameters to lift out of this function
-    #  - make type-agnostic
-    timout_after_nan = 5
-    fac = [0.8, 0.9, 0.25^(1/(order+1)), 0.38^(1/(order+1))][1]
-    facmax = 5.0 # maximal step size increase. 1.5-5
-    facmin = 1./facmax  # maximal step size decrease. ?
-
-    # if NaN present make step size smaller by maximum
-    any(isnan(xtrial)) && return 10., dt*facmin, timout_after_nan
-
-    # Eq 4.10, component-wise tolerance:
-    tol = abstol + max(abs(x0), abs(xtrial)).*reltol
-
-    # Eq. 4.11:
-    # err = norm(1/dof^2*xerr./tol, 2)
-    err = norm(xerr./tol, 2)     # sans 1/dof
-    #err = norm(xerr./tol, Inf)
-
-    # Eq 4.13:
-#    newdt = tdir*dt * min(facmax, max(facmin, fac*(1/err)^(1/(order+1))))
-    newdt = min(maxstep, tdir*dt*max(facmin, fac*(1/err)^(1/(order+1)))) # modified
-    if timeout>0
-        newdt = min(newdt, dt)
-        timeout -= 1
+function allocate!{T}(vec::Vector{T}, y0, dof)
+    # Allocates all vectors inside a Vector{Vector} using the same
+    # kind of container as y0 has and element type eltype(eltype(vec)).
+    for s=1:length(vec)
+        vec[s] = similar(y0, eltype(T), dof)
     end
-    return err, tdir*min(newdt, maxstep), timeout
 end
+function index_or_push!(vec, i, val)
+    # Fills in the vector until there is no space, then uses push!
+    # instead.
+    if length(vec)>=i
+        vec[i] = val
+    else
+        push!(vec, val)
+    end
+end
+vcat_nosplat(y) =  eltype(y[1])[el[1] for el in y] # Does vcat(y...) without the splatting
 
-# For dense output see Hairer & Wanner p.190 using Hermite interpolation
 function hermite_interp!(y, tquery,t,dt,y0,y1,f0,f1)
+    # For dense output see Hairer & Wanner p.190 using Hermite
+    # interpolation. Updates y in-place.
+    #
     # f_0 = f(x_0 , y_0) , f_1 = f(x_0 + h, y_1 )
     # this is O(3). TODO for higher order.
-    #
-    # Updates y in-place
+
     theta = (tquery-t)/dt
     for i=1:length(y0)
         y[i] = ((1-theta)*y0[i] + theta*y1[i] + theta*(theta-1) *
@@ -485,11 +505,8 @@ function hermite_interp!(y, tquery,t,dt,y0,y1,f0,f1)
     nothing
 end
 function hermite_interp(tquery,t,dt,y0,y1,f0,f1)
+    # Returns the y
     y = similar(y0)
     hermite_interp!(y,tquery,t,dt,y0,y1,f0,f1)
     return y
 end
-
-ode45_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_rk45; kwargs...)
-ode54_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_dopri5; kwargs...)
-ode78_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_feh78; kwargs...)
