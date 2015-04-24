@@ -176,65 +176,116 @@ function make_consistent_types(fn, y0, tspan, btab)
     # Returns
     # - Et: eltype of time, needs to be a real "continuous" type, at
     #       the moment a FloatingPoint
-    # - Ey: eltype of y
-    # - Ef: eltype of fn(t,y)
+    # - Eyf: suitable eltype of y and f(t,y)
     #   --> both of these are set to typeof(y0[1]/tspan[1])
+    # - Ty: container type of y0
     # - btab: tableau with entries converted to Et
 
-    Ey = typeof(y0[1]/(tspan[end]-tspan[1]))
-    Ef = Ey # this could be changed if function type become available
+    Ty = typeof(y0)
+    Eyf = typeof(y0[1]/(tspan[end]-tspan[1]))
 
     Et = eltype(tspan)
     @assert Et<:Real
     if !(Et<:FloatingPoint)
         Et = promote_type(Et, Float64)
     end
-    if isleaftype(Et)
-        warn("The eltype(tspan) is not a concrete type!  Change for better performance.")
+
+    # if all are Floats, make them the same
+    if Et<:FloatingPoint &&  Eyf<:FloatingPoint
+        Et = promote_type(Et, Eyf)
+        Eyf = Et
     end
 
-    btab_ = convert(Et, btab)
-    return Et, Ey, Ef, btab_
-end
+    !isleaftype(Et) && warn("The eltype(tspan) is not a concrete type!  Change type of tspan for better performance.")
+    !isleaftype(Eyf) && warn("The eltype infered from y0/tspan[1] is not a concrete type!  Change type of y0 and/or tspan for better performance.")
 
+    btab_ = convert(Et, btab)
+    return Et, Eyf, Ty, btab_
+end
+function allocate!{T<:AbstractVector}(vec::Vector{T}, y0, dof)
+    for s=1:length(vec)
+        vec[s] = similar(y0, eltype(T), dof)
+    end
+end
 ######
 # Fixed step Runge-Kutta method
 # TODO: iterator method
 function oderk_fixed(fn, y0, tspan, btab::TableauRKExplicit)
     # Non-arrays y0 treat as scalar
-    fn_ = (t, y) -> [fn(t, y[1])]
+    fn_(t, y) = [fn(t, y[1])]
     t,y = oderk_fixed(fn_, [y0], tspan, btab)
-    return t,y[:]
+    return t, vcat_nosplat(y)
 end
+vcat_nosplat(y) =  eltype(y[1])[el[1] for el in y]
 function oderk_fixed{N,S}(fn, y0::AbstractVector, tspan,
                           btab_::TableauRKExplicit{N,S})
     # TODO: instead of AbstractVector use a Holy-trait
-    Et, Ey, Ef, btab = make_consistent_types(fn, y0, tspan, btab_)
+    Et, Eyf, Ty, btab = make_consistent_types(fn, y0, tspan, btab_)
     dof = length(y0)
     tsteps = length(tspan)
-    ys = similar(y0, Ey, dof, tsteps)
-    ys[:,1] = y0
+
+    ys = Array(Ty, tsteps)
+    allocate!(ys, y0, dof)
+    ys[1] = copy(y0)
+    
     tspan = convert(Vector{Et}, tspan)
     # work arrays:
-    ks = similar(y0, Ef, dof, S)
-    ytmp = similar(y0, Ey, dof)
+    ks = Array(Ty, S)
+    # allocate!(ks, dof) # no need to allocate as fn is not in-place
+    ytmp = similar(y0, Eyf, dof)
     for i=1:length(tspan)-1
         dt = tspan[i+1]-tspan[i]
-        for d=1:dof
-            ys[d,i+1] = ys[d,i]
-        end
+        ys[i+1][:] = ys[i]
         for s=1:S
-            for d=1:dof # loop as ytmp[:] = ys[:,i] allocates!
-                ytmp[d] = ys[d,i]
-            end
-            calc_next_k!(ks, ytmp, ytmp, s, fn, tspan[i], dt, dof, btab)
+            calc_next_k!(ks, ytmp, ys[i], s, fn, tspan[i], dt, dof, btab)
             for d=1:dof
-                ys[d,i+1] += dt * btab.b[s]*ks[d,s]
+                ys[i+1][d] += dt * btab.b[s]*ks[s][d]
             end
         end
     end
     return tspan, ys
 end
+# isa(ks, Vector) version:
+function calc_next_k!{Ty}(ks::Vector, ytmp::Ty, y, s, fn, t, dt, dof, btab)
+    # Calculates the next ks and puts it into ks[s]
+    # - ks and ytmp are modified inside this function.
+    ytmp[:] = y
+    for ss=1:s-1, d=1:dof
+        ytmp[d] += dt * ks[ss][d] * btab.a[s,ss]
+    end
+    ks[s] = fn(t + btab.c[s]*dt, ytmp)::Ty
+    nothing
+end
+
+# function oderk_fixed{N,S}(fn, y0::AbstractMatrix, tspan,
+#                           btab_::TableauRKExplicit{N,S})
+#     # TODO: instead of AbstractVector use a Holy-trait
+#     Et, Eyf, Ef, btab = make_consistent_types(fn, y0, tspan, btab_)
+#     dof = length(y0)
+#     tsteps = length(tspan)
+#     ys = similar(y0, Eyf, dof, tsteps)
+#     ys[:,1] = y0
+#     tspan = convert(Vector{Et}, tspan)
+#     # work arrays:
+#     ks = similar(y0, Ef, dof, S)
+#     ytmp = similar(y0, Eyf, dof)
+#     for i=1:length(tspan)-1
+#         dt = tspan[i+1]-tspan[i]
+#         for d=1:dof
+#             ys[d,i+1] = ys[d,i]
+#         end
+#         for s=1:S
+#             for d=1:dof
+#                 ytmp[d] = ys[d,i]
+#             end
+#             calc_next_k!(ks, ytmp, ytmp, s, fn, tspan[i], dt, dof, btab)
+#             for d=1:dof
+#                 ys[d,i+1] += dt * btab.b[s]*ks[d,s]
+#             end
+#         end
+#     end
+#     return tspan, ys
+# end
 
 # calculates k[s]
 function calc_next_k!{N,S,Ty}(ks::Matrix, ytmp::Ty, y, s, fn, t, dt, dof, btab::TableauRKExplicit{N,S})
@@ -273,7 +324,7 @@ function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplici
     # that could be relaxed with a Holy-trait.
     !isadaptive(btab_) && error("Can only use this solver with an adaptive RK Butcher table")
 
-    Et, Ey, Ef, btab = make_consistent_types(fn, y0, tspan, btab_)
+    Et, Eyf, Ty, btab = make_consistent_types(fn, y0, tspan, btab_)
     # parameters
     order = minimum(btab.order)
     timeout_const = 5 # after step reduction do not increase step for
@@ -287,23 +338,23 @@ function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplici
     tend = tspan[end]
 
     # work arrays:
-    y      = similar(y0, Ey, dof)      # y at time t
+    y      = similar(y0, Eyf, dof)      # y at time t
     y[:]   = y0
-    ytrial = similar(y0, Ey, dof) # trial solution at time t+dt
-    yerr   = similar(y0, Ey, dof) # error of trial solution
-    ks     = similar(y0, Ey, dof, S)
-    ytmp   = similar(y0, Ey, dof)
-    f0     = similar(y0, Ey, dof)
-    f1     = similar(y0, Ey, dof)
+    ytrial = similar(y0, Eyf, dof) # trial solution at time t+dt
+    yerr   = similar(y0, Eyf, dof) # error of trial solution
+    ks     = similar(y0, Eyf, dof, S)
+    ytmp   = similar(y0, Eyf, dof)
+    f0     = similar(y0, Eyf, dof)
+    f1     = similar(y0, Eyf, dof)
 
     # Option points determines where solution is returned:
     if points==:specified
         nsteps = length(tspan)
-        ys = similar(y0, Ey, dof, nsteps)
+        ys = similar(y0, Eyf, dof, nsteps)
         ys[:,1] = y
         tspan_fixed = []
     elseif points==:all
-        ys = similar(y0, Ey, 0)
+        ys = similar(y0, Eyf, 0)
         append!(ys, y)
         nsteps = length(tspan)
         tspan_fixed = tspan
