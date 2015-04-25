@@ -22,6 +22,11 @@ function make_consistent_types(fn, y0, tspan, btab)
     # - Ty: container type of y0
     # - btab: tableau with entries converted to Et
 
+    # Needed interface:
+    # On components: /, -
+    # On container: eltype, promote_type
+    # On time container: 
+
     Ty = typeof(y0)
     Eyf = typeof(y0[1]/(tspan[end]-tspan[1]))
 
@@ -226,6 +231,12 @@ end
 function oderk_fixed{N,S}(fn, y0::AbstractVector, tspan,
                           btab_::TableauRKExplicit{N,S})
     # TODO: instead of AbstractVector use a Holy-trait
+
+    # Needed interface:
+    # On components: 
+    # On y0 container: length, copy, similar, setindex!
+    # On time container: getindex, convert. length
+
     Et, Eyf, Ty, btab = make_consistent_types(fn, y0, tspan, btab_)
     dof = length(y0)
 
@@ -272,6 +283,13 @@ function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplici
                           initstep=0.,
                           points=:all
                           )
+    # Needed interface:
+    # On components:
+    #  - note that the type of the components might change!
+    # On y0 container: length, similar, setindex!
+    # On time container: getindex, convert. length
+
+    
     # For y0 which support indexing.  Currently y0<:AbstractVector but
     # that could be relaxed with a Holy-trait.
     !isadaptive(btab_) && error("Can only use this solver with an adaptive RK Butcher table")
@@ -297,7 +315,7 @@ function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplici
     ks = Array(Ty, S)
     # allocate!(ks, y0, dof) # no need to allocate as fn is not in-place
     ytmp   = similar(y0, Eyf, dof)
-    f0     = similar(y0, Eyf, dof)
+    f0     = similar(y0, Eyf, dof) # TODO: not needed
     f1     = similar(y0, Eyf, dof)
 
     # output ys
@@ -316,7 +334,7 @@ function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplici
         error("Unrecognized option points==$points")
     end
     # Time
-    dt, tdir, ks[1] = hinit(fn, y, tstart, tend, order, reltol, abstol) # ks[:,1]==f0
+    dt, tdir, ks[1] = hinit(fn, y, tstart, tend, order, reltol, abstol) # sets ks[1]=f0
     if initstep!=0
         dt = sign(initstep)==tdir ? initstep : error("initstep has wrong sign.")
     end
@@ -398,6 +416,11 @@ end
 function calc_next_k!{Ty}(ks::Vector, ytmp::Ty, y, s, fn, t, dt, dof, btab)
     # Calculates the next ks and puts it into ks[s]
     # - ks and ytmp are modified inside this function.
+
+    # Needed interface:
+    # On components: +, *
+    # On y0 container: setindex!, getindex, fn
+
     ytmp[:] = y
     for ss=1:s-1, d=1:dof
         ytmp[d] += dt * ks[ss][d] * btab.a[s,ss]
@@ -422,7 +445,7 @@ function stepsize_hw92!(dt, tdir, x0, xtrial, xerr, order,
 
     # Needed interface:
     # On components: isnan, norm
-    # On container: norm, get/setindex
+    # On y0 container: norm, get/setindex
 
     timout_after_nan = 5
     fac = [0.8, 0.9, 0.25^(1/(order+1)), 0.38^(1/(order+1))][1]
@@ -451,8 +474,13 @@ function rk_embedded_step!{N,S}(ytrial, yerr, ks, ytmp, y, fn, t, dt, dof, btab:
     # Assumes that ks[:,1] is already calculated!
     #
     # Modifies ytrial, yerr, ks, and ytmp
-    ytrial[:] = zero(eltype(ytrial))
-    yerr[:] = zero(eltype(ytrial))
+
+    # Needed interface:
+    # On components: arithmetic, zero
+    # On y0 container: fill!, setindex!, getindex
+
+    fill!(ytrial, zero(eltype(ytrial)) )
+    fill!(yerr, zero(eltype(ytrial)) )
     for d=1:dof
         ytrial[d] += btab.b[1,1]*ks[1][d]
         yerr[d]   += btab.b[2,1]*ks[1][d]
@@ -463,7 +491,6 @@ function rk_embedded_step!{N,S}(ytrial, yerr, ks, ytmp, y, fn, t, dt, dof, btab:
             ytrial[d] += btab.b[1,s]*ks[s][d]
             yerr[d]   += btab.b[2,s]*ks[s][d]
         end
-
     end
     for d=1:dof
         yerr[d]   = dt * (ytrial[d]-yerr[d])
