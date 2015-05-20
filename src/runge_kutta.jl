@@ -446,7 +446,7 @@ function stepsize_hw92!(dt, tdir, x0, xtrial, xerr, order,
     # - allow other norms
 
     # Needed interface:
-    # On components: isnan, norm
+    # On components: isoutofdomain, norm
     # On y0 container: norm, get/setindex
 
     timout_after_nan = 5

@@ -27,10 +27,7 @@ solvers = [
     ODE.ode4s_kr,
 
     ODE.ode78_fb]
-    solver=1
-    ys = 1
-    t = 1
-    y=1
+
 for solver in solvers
     println("using $solver")
     # dy
@@ -84,5 +81,6 @@ let
               0.9999999791665050] # reference solution at tspan[2]
     @test norm(refsol-y[end], Inf) < 2e-10
 end
+include("interface-tests.jl")
 
 println("All looks OK")
