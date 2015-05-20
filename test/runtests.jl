@@ -36,7 +36,7 @@ for solver in solvers
     # dy
     # -- = 6 ==> y = 6t
     # dt
-    t,y=solver((t,y)->6, 0., [0:.1:1;])
+    t,y=solver((t,y)->6.0, 0., [0:.1:1;])
     @test maximum(abs(y-6t)) < tol
 
     # dy

@@ -1,5 +1,7 @@
 using Compat
 
+isoutofdomain(x) = isnan(x)
+
 function make_consistent_types(fn, y0, tspan, btab)
     # There are a few types involved in a call to a ODE solver which
     # somehow need to be consistent:
@@ -82,8 +84,8 @@ order(b::Tableau) = b.order
 # The advantage of each having its own type, makes it possible to have
 # specialized methods for a particular tablau
 immutable TableauRKExplicit{Name, S, T} <: Tableau{Name, S, T}
-#    order::(@compat(Tuple{Vararg{Int}})) # the order of the methods
-    order::(Int...) # the order of the methods
+    order::(@compat(Tuple{Vararg{Int}})) # the order of the methods
+#    order::(Int...) # the order of the methods
     a::Matrix{T}
     # one or several row vectors.  First row is used for the step,
     # second for error calc.
@@ -99,11 +101,11 @@ immutable TableauRKExplicit{Name, S, T} <: Tableau{Name, S, T}
         new(order,a,b,c)
     end
 end
-function TableauRKExplicit{T}(name::Symbol, order::(Int...),
+function TableauRKExplicit{T}(name::Symbol, order::(@compat(Tuple{Vararg{Int}})),
                    a::Matrix{T}, b::Matrix{T}, c::Vector{T})
     TableauRKExplicit{name,length(c),T}(order, a, b, c)
 end
-function TableauRKExplicit(name::Symbol, order::(Int...), T::Type,
+function TableauRKExplicit(name::Symbol, order::(@compat(Tuple{Vararg{Int}})), T::Type,
                    a::Matrix, b::Matrix, c::Vector)
     TableauRKExplicit{name,length(c),T}(order, convert(Matrix{T},a),
                                         convert(Matrix{T},b), convert(Vector{T},c) )
@@ -329,7 +331,7 @@ function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplici
         tspan_fixed = tspan
         tspan = Et[tstart]
         iter_fixed = 2 # index into tspan_fixed
-        sizehint(tspan, nsteps_fixed)
+        sizehint!(tspan, nsteps_fixed)
     elseif points!=:specified
         error("Unrecognized option points==$points")
     end
@@ -455,7 +457,7 @@ function stepsize_hw92!(dt, tdir, x0, xtrial, xerr, order,
     # in-place calculate xerr./tol
     for d=1:dof
         # if NaN present make step size smaller by maximum
-        isnan(xtrial[d]) && return 10., dt*facmin, timout_after_nan
+        isoutofdomain(xtrial[d]) && return 10., dt*facmin, timout_after_nan
 
         xerr[d] = xerr[d]/(abstol + max(norm(x0[d]), norm(xtrial[d]))*reltol) # Eq 4.10
     end
@@ -536,4 +538,30 @@ function hermite_interp(tquery,t,dt,y0,y1,f0,f1)
     y = similar(y0)
     hermite_interp!(y,tquery,t,dt,y0,y1,f0,f1)
     return y
+end
+
+function hinit(F, x0::AbstractVector, t0, tend, p, reltol, abstol)
+    tdir = sign(tend-t0)
+    tdir==0 && error("Zero time span")
+    tau = max(reltol*norm(x0, Inf), abstol)
+    d0 = norm(x0, Inf)/tau
+    f0 = F(t0, x0)
+    d1 = norm(f0, Inf)/tau
+    if d0 < 1e-5 || d1 < 1e-5
+        h0 = 1e-6
+    else
+        h0 = 0.01*(d0/d1)
+    end
+    # perform Euler step
+    x1 = x0 + tdir*h0*f0
+    f1 = F(t0 + tdir*h0, x1)
+    # estimate second derivative
+    d2 = norm(f1 - f0, Inf)/(tau*h0)
+    if max(d1, d2) <= 1e-15
+        h1 = max(1e-6, 1e-3*h0)
+    else
+        pow = -(2. + log10(max(d1, d2)))/(p + 1.)
+        h1 = 10.^pow
+    end
+    return tdir*min(100*h0, h1), tdir, f0
 end

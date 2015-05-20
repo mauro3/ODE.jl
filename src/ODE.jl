@@ -281,12 +281,12 @@ function ode4(F, x0, tspan)
     for i = 1:length(tspan)-1
         # Compute midstep derivatives
         midxdot[1] = F(tspan[i],         x[i])
-        midxdot[2] = 2*F(tspan[i]+h[i]./2, x[i] + midxdot[1].*h[i]./2)
-        midxdot[3] = 2*F(tspan[i]+h[i]./2, x[i] + midxdot[2].*h[i]./2)
-        midxdot[4] = F(tspan[i]+h[i],    x[i] + midxdot[3].*h[i])
+        midxdot[2] = 2*F(tspan[i]+h[i]/2, x[i] + midxdot[1]*h[i]/2)
+        midxdot[3] = 2*F(tspan[i]+h[i]/2, x[i] + midxdot[2]*h[i]/2)
+        midxdot[4] = F(tspan[i]+h[i],    x[i] + midxdot[3]*h[i])
 
         # Integrate
-        x[i+1] = x[i] + 1/6 .*h[i].*sum(midxdot)
+        x[i+1] = x[i] + 1/6*h[i]*sum(midxdot)
     end
     return vcat(tspan), x
 end
