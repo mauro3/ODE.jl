@@ -1,93 +1,11 @@
-using Compat
+# Explicit Runge-Kutta solvers
+##############################
+# (Hairer & Wanner 1992 p.134, p.165-169)
 
-# isoutofdomain takes the state and returns true if state is outside
-# of the allowed domain.
-isoutofdomain(x) = isnan(x)
+###########################################
+# Tableaus for explicit Runge-Kutta methods
+###########################################
 
-function make_consistent_types(fn, y0, tspan, btab)
-    # There are a few types involved in a call to a ODE solver which
-    # somehow need to be consistent:
-    #
-    # Et = eltype(tspan)
-    # Ey = eltype(y0)
-    # Ef = eltype(Tf)
-    #
-    # There are also the types of the containers, but they are not
-    # needed as `similar` is used to make containers.
-    # Tt = typeof(tspan)
-    # Ty = typeof(y0)              # note, this can be a scalar
-    # Tf = typeof(F(tspan(1),y0))  # note, this can be a scalar
-    #
-    # Returns
-    # - Et: eltype of time, needs to be a real "continuous" type, at
-    #       the moment a FloatingPoint
-    # - Eyf: suitable eltype of y and f(t,y)
-    #   --> both of these are set to typeof(y0[1]/(tspan[end]-tspan[1]))
-    # - Ty: container type of y0
-    # - btab: tableau with entries converted to Et
-
-    # Needed interface:
-    # On components: /, -
-    # On container: eltype, promote_type
-    # On time container: eltype
-
-    Ty = typeof(y0)
-    Eyf = typeof(y0[1]/(tspan[end]-tspan[1]))
-
-    Et = eltype(tspan)
-    @assert Et<:Real
-    if !(Et<:FloatingPoint)
-        Et = promote_type(Et, Float64)
-    end
-
-    # if all are Floats, make them the same
-    if Et<:FloatingPoint &&  Eyf<:FloatingPoint
-        Et = promote_type(Et, Eyf)
-        Eyf = Et
-    end
-
-    !isleaftype(Et) && warn("The eltype(tspan) is not a concrete type!  Change type of tspan for better performance.")
-    !isleaftype(Eyf) && warn("The eltype(y0/tspan[1]) is not a concrete type!  Change type of y0 and/or tspan for better performance.")
-
-    btab_ = convert(Et, btab)
-    return Et, Eyf, Ty, btab_
-end
-
-###################
-# Butcher Tableaus, or more generally coefficient tables
-# see Hairer & Wanner 1992, p. 134, 166
-
-abstract Tableau{Name, S, T<:Real}
-# Name is the name of the tableau/method (a symbol)
-# S is the number of stages (an int)
-# T is the type of the coefficients
-#
-# For Runge-Kutta methods it assumes fields:
-# order::(Int...) # order of the method(s)
-# a::Matrix{T}  # SxS matrix
-# b::Matrix{T}  # 1 or 2 x S matrix (fixed step/ adaptive)
-# c::Vector{T}  # S
-#
-# For a tableau:
-#  c1  | a_11   ....   a_1s
-#  .   | a_21 .          .
-#  .   | a_31     .      .
-#  .   | ....         .  .
-#  c_s | a_s1  ....... a_ss
-# -----+--------------------
-#      | b_1     ...   b_s   this is the one used for stepping
-#      | b'_1    ...   b'_s  this is the one used for error-checking
-
-Base.eltype{N,S,T}(b::Tableau{N,S,T}) = T
-
-# Test whether it's an explicit method
-isexplicit(b::Tableau) = istril(b.a)
-isadaptive(b::Tableau) = size(b.b, 1)==2
-order(b::Tableau) = b.order
-
-# Tableaus for explicit Runge-Kutta methods:
-# The advantage of each having its own type, makes it possible to have
-# specialized methods for a particular tablau
 immutable TableauRKExplicit{Name, S, T} <: Tableau{Name, S, T}
     order::(@compat(Tuple{Vararg{Int}})) # the order of the methods
     a::Matrix{T}
@@ -102,6 +20,7 @@ immutable TableauRKExplicit{Name, S, T} <: Tableau{Name, S, T}
         @assert istril(a)
         @assert S==length(c)==size(a,1)==size(a,2)==size(b,2)
         @assert size(b,1)==length(order)
+#        @assert sum(a,2)==c # consistency
         new(order,a,b,c)
     end
 end
@@ -168,6 +87,17 @@ const bt_rk21 = TableauRKExplicit(:heun_euler,(2,1), Rational{Int64},
                                    1     0],
                                   [0,    1])
 
+# Bogacki–Shampine coefficients
+const bt_rk23 = TableauRKExplicit(:bogacki_shampine,(2,3), Rational{Int64},
+                                  [0           0      0      0
+                                   1/2         0      0      0
+                                   0         3/4      0      0
+                                   2/9       1/3     4/9     0],
+                                  [7/24 1/4 1/3 1/8
+                                   2/9 1/3 4/9 0],
+                                  [0, 1//2, 3//4, 1] 
+                         )
+
 # Fehlberg https://en.wikipedia.org/wiki/Runge%E2%80%93Kutta%E2%80%93Fehlberg_method
 const bt_rk45 = TableauRKExplicit(:fehlberg,(4,5),Rational{Int64},
                           [  0           0           0            0         0     0
@@ -217,17 +147,15 @@ const bt_feh78 = TableauRKExplicit(:feh78, (7,8), Rational{Int64},
                             )
 
 
-###########################
-# Runge-Kutta solvers
-# (Hairer & Wanner 1992 p.134, p.165-169)
+################################
+# Fixed step Runge-Kutta methods
+################################
 
-######
-# Fixed step Runge-Kutta method
 # TODO: iterator method
-ode4_v2(fn, y0, tspan) = oderk_fixed(fn, y0, tspan, bt_rk4)
-ode1_euler(fn, y0, tspan) = oderk_fixed(fn, y0, tspan, bt_feuler)
+ode1(fn, y0, tspan) = oderk_fixed(fn, y0, tspan, bt_feuler)
 ode2_midpoint(fn, y0, tspan) = oderk_fixed(fn, y0, tspan, bt_midpoint)
 ode2_heun(fn, y0, tspan) = oderk_fixed(fn, y0, tspan, bt_heun)
+ode4(fn, y0, tspan) = oderk_fixed(fn, y0, tspan, bt_rk4)
 
 function oderk_fixed(fn, y0, tspan, btab::TableauRKExplicit)
     # Non-arrays y0 treat as scalar
@@ -269,12 +197,15 @@ function oderk_fixed{N,S}(fn, y0::AbstractVector, tspan,
     return tspan, ys
 end
 
+##############################
+# Adaptive Runge-Kutta methods
+##############################
 
-# Adaptive ODE time stepper
-ode21_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_rk21; kwargs...)
-ode45_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_rk45; kwargs...)
-ode54_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_dopri5; kwargs...)
-ode78_v2(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_feh78; kwargs...)
+ode21(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_rk21; kwargs...)
+ode23(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_rk23; kwargs...)
+ode45(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_rk45; kwargs...)
+ode54(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_dopri5; kwargs...)
+ode78(fn, y0, tspan; kwargs...) = oderk_adapt(fn, y0, tspan, bt_feh78; kwargs...)
 
 function oderk_adapt(fn, y0, tspan, btab::TableauRKExplicit; kwords...)
     # For y0 which don't support indexing.

@@ -3,30 +3,28 @@ using Base.Test
 
 tol = 1e-2
 
-ode5ms(F, x0, tspan) = ODE.ode_ms(F, x0, tspan, 5)
-
 solvers = [
-    ODE.ode23,
+           ## Non-stiff           
+           # fixed step
+           ODE.ode1,
+           ODE.ode2_midpoint,
+           ODE.ode2_heun,
+           ODE.ode4,
+           ODE.ode4ms,
+           ODE.ode5ms,
+           # adaptive
+           ODE.ode21,
+           ODE.ode23,
+           ODE.ode45,
+           ODE.ode54,
+           ODE.ode78,
 
-    ODE.ode4,
-    ODE.ode45_dp,
-    ODE.ode45_fb,
-    ODE.ode45_ck,
-#new:
-    ODE.ode4_v2,
-#    ODE.ode21_v2, # because of strange travis. TODO: re-enable
-    ODE.ode45_v2,
-    ODE.ode54_v2,
-    ODE.ode78_v2,
-
-    ODE.ode23s,
-
-    ODE.ode4ms,
-    ode5ms,
-    ODE.ode4s_s,
-    ODE.ode4s_kr,
-
-    ODE.ode78_fb]
+           ## Stiff
+           # fixed-step
+           ODE.ode4s_s,
+           ODE.ode4s_kr,
+           # adaptive
+           ODE.ode23s]
 
 for solver in solvers
     println("using $solver")
