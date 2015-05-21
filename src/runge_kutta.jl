@@ -22,14 +22,14 @@ function make_consistent_types(fn, y0, tspan, btab)
     # - Et: eltype of time, needs to be a real "continuous" type, at
     #       the moment a FloatingPoint
     # - Eyf: suitable eltype of y and f(t,y)
-    #   --> both of these are set to typeof(y0[1]/tspan[1])
+    #   --> both of these are set to typeof(y0[1]/(tspan[end]-tspan[1]))
     # - Ty: container type of y0
     # - btab: tableau with entries converted to Et
 
     # Needed interface:
     # On components: /, -
     # On container: eltype, promote_type
-    # On time container: 
+    # On time container: eltype
 
     Ty = typeof(y0)
     Eyf = typeof(y0[1]/(tspan[end]-tspan[1]))
@@ -47,7 +47,7 @@ function make_consistent_types(fn, y0, tspan, btab)
     end
 
     !isleaftype(Et) && warn("The eltype(tspan) is not a concrete type!  Change type of tspan for better performance.")
-    !isleaftype(Eyf) && warn("The eltype infered from y0/tspan[1] is not a concrete type!  Change type of y0 and/or tspan for better performance.")
+    !isleaftype(Eyf) && warn("The eltype(y0/tspan[1]) is not a concrete type!  Change type of y0 and/or tspan for better performance.")
 
     btab_ = convert(Et, btab)
     return Et, Eyf, Ty, btab_
@@ -60,9 +60,11 @@ end
 abstract Tableau{Name, S, T<:Real}
 # Name is the name of the tableau/method (a symbol)
 # S is the number of stages (an int)
-# assumes fields
+# T is the type of the coefficients
+#
+# For Runge-Kutta methods it assumes fields:
 # order::(Int...) # order of the method(s)
-# a::Matrix{T}  # SxS-1 matrix
+# a::Matrix{T}  # SxS matrix
 # b::Matrix{T}  # 1 or 2 x S matrix (fixed step/ adaptive)
 # c::Vector{T}  # S
 #
@@ -83,11 +85,11 @@ isexplicit(b::Tableau) = istril(b.a)
 isadaptive(b::Tableau) = size(b.b, 1)==2
 order(b::Tableau) = b.order
 
+# Tableaus for explicit Runge-Kutta methods:
 # The advantage of each having its own type, makes it possible to have
 # specialized methods for a particular tablau
 immutable TableauRKExplicit{Name, S, T} <: Tableau{Name, S, T}
     order::(@compat(Tuple{Vararg{Int}})) # the order of the methods
-#    order::(Int...) # the order of the methods
     a::Matrix{T}
     # one or several row vectors.  First row is used for the step,
     # second for error calc.
@@ -113,7 +115,8 @@ function TableauRKExplicit(name::Symbol, order::(@compat(Tuple{Vararg{Int}})), T
                                         convert(Matrix{T},b), convert(Vector{T},c) )
 end
 conv_field{T,N}(D,a::Array{T,N}) = convert(Array{D,N}, a)
-function Base.convert{NN<:Number,Name,S,T}(Tnew::Type{NN}, tab::TableauRKExplicit{Name,S,T})
+function Base.convert{NN<:Real,Name,S,T}(Tnew::Type{NN}, tab::TableauRKExplicit{Name,S,T})
+    # Converts the tableau coefficients to the new type Tnew
     newflds = ()
     @compat for n in fieldnames(tab)
         fld = getfield(tab,n)
@@ -129,7 +132,7 @@ end
 # First same as last.  Means ks[:,end]=ks_nextstep[:,1], c.f. H&W p.167
 isFSAL(btab::TableauRKExplicit) = btab.a[end,:]==btab.b[1,:] && btab.c[end]==1 # the latter is not needed really
 
-## Tableaus for explicit methods
+## Tableaus for explicit RK methods
 # Fixed step:
 const bt_feuler = TableauRKExplicit(:feuler,(1,), Rational{Int64},
                                     zeros(Int,1,1),
@@ -138,9 +141,9 @@ const bt_feuler = TableauRKExplicit(:feuler,(1,), Rational{Int64},
                                     )
 const bt_midpoint = TableauRKExplicit(:midpoint,(2,), Rational{Int64},
                                       [0  0
-                                       .5  0],
+                                       1//2  0],
                                       [0, 1]',
-                                      [0, .5]
+                                      [0, 1//2]
                                       )
 const bt_heun = TableauRKExplicit(:heun,(2,), Rational{Int64},
                                   [0  0
@@ -179,13 +182,13 @@ const bt_rk45 = TableauRKExplicit(:fehlberg,(4,5),Rational{Int64},
 
 # Dormand-Prince https://en.wikipedia.org/wiki/Dormand%E2%80%93Prince_method
 const bt_dopri5 = TableauRKExplicit(:dopri, (5,4), Rational{Int64},
-                     [0   0 0 0 0 0 0
-                      1//5 0 0 0 0 0 0
-                      3//40     9//40 0 0 0 0 0
-                      44//45     -56//15     32//9 0 0 0 0
-                      19372//6561     -25360//2187     64448//6561     -212//729 0 0 0
-                      9017//3168     -355//33     46732//5247     49//176     -5103//18656 0 0
-                      35//384         0     500//1113       125//192      -2187//6784         11//84      0],
+                     [0           0            0                   0            0      0 0
+                      1//5        0            0                   0            0      0 0
+                      3//40       9//40        0                   0            0      0 0
+                      44//45      -56//15      32//9               0            0      0 0
+                      19372//6561 -25360//2187 64448//6561 -212//729            0      0 0
+                      9017//3168  -355//33     46732//5247   49//176 -5103//18656      0 0
+                      35//384     0            500//1113    125//192  -2187//6784 11//84 0],
                      [35//384         0     500//1113       125//192      -2187//6784         11//84      0
                       5179//57600     0     7571//16695     393//640     -92097//339200     187//2100     1//40],
                      [0, 1//5, 3//10, 4//5, 8//9, 1, 1]
@@ -291,8 +294,7 @@ function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplici
     # On components:
     #  - note that the type of the components might change!
     # On y0 container: length, similar, setindex!
-    # On time container: getindex, convert. length
-
+    # On time container: getindex, convert, length
     
     # For y0 which support indexing.  Currently y0<:AbstractVector but
     # that could be relaxed with a Holy-trait.
@@ -319,8 +321,6 @@ function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplici
     ks = Array(Ty, S)
     # allocate!(ks, y0, dof) # no need to allocate as fn is not in-place
     ytmp   = similar(y0, Eyf, dof)
-    f0     = similar(y0, Eyf, dof) # TODO: not needed
-    f1     = similar(y0, Eyf, dof)
 
     # output ys
     nsteps_fixed = length(tspan) # these are always output
@@ -365,8 +365,8 @@ function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplici
             push!(errs, err)
 
             # Output:
-            f0[:] = ks[1]
-            f1[:] = isFSAL(btab) ? ks[S] : fn(t+dt, ytrial)
+            f0 = ks[1]
+            f1 = isFSAL(btab) ? ks[S] : fn(t+dt, ytrial)
             if points==:specified
                 # interpolate onto given output points
                 while iter-1<nsteps_fixed && (tdir*tspan[iter]<tdir*(t+dt) || laststep) # output at all new times which are < t+dt
@@ -387,7 +387,7 @@ function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplici
                 push!(tspan, t+dt)
                 iter += 1
             end
-            ks[1] = f1 # load ks[:,1] for next step
+            ks[1] = f1 # load ks[1]==f0 for next step
 
             # Break if this was the last step:
             laststep && break
@@ -415,61 +415,6 @@ function oderk_adapt{N,S}(fn, y0::AbstractVector, tspan, btab_::TableauRKExplici
         end
     end
     return tspan, ys
-end
-
-function calc_next_k!{Ty}(ks::Vector, ytmp::Ty, y, s, fn, t, dt, dof, btab)
-    # Calculates the next ks and puts it into ks[s]
-    # - ks and ytmp are modified inside this function.
-
-    # Needed interface:
-    # On components: +, *
-    # On y0 container: setindex!, getindex, fn
-
-    ytmp[:] = y
-    for ss=1:s-1, d=1:dof
-        ytmp[d] += dt * ks[ss][d] * btab.a[s,ss]
-    end
-    ks[s] = fn(t + btab.c[s]*dt, ytmp)::Ty
-    nothing
-end
-
-function stepsize_hw92!(dt, tdir, x0, xtrial, xerr, order,
-                       timeout, dof, abstol, reltol, maxstep)
-    # Estimates the error and a new step size following Hairer &
-    # Wanner 1992, p167 (with some modifications)
-    #
-    # If timeout>0 no step size increase is allowed, timeout is
-    # decremented in here.
-    #
-    # Returns the error, newdt and the number of timeout-steps
-    #
-    # TODO:
-    # - allow component-wise reltol and abstol?
-    # - allow other norms
-
-    # Needed interface:
-    # On components: isoutofdomain, norm
-    # On y0 container: norm, get/setindex
-
-    timout_after_nan = 5
-    fac = [0.8, 0.9, 0.25^(1/(order+1)), 0.38^(1/(order+1))][1]
-    facmax = 5.0 # maximal step size increase. 1.5-5
-    facmin = 1./facmax  # maximal step size decrease. ?
-
-    # in-place calculate xerr./tol
-    for d=1:dof
-        # if NaN present make step size smaller by maximum
-        isoutofdomain(xtrial[d]) && return 10., dt*facmin, timout_after_nan
-
-        xerr[d] = xerr[d]/(abstol + max(norm(x0[d]), norm(xtrial[d]))*reltol) # Eq 4.10
-    end
-    err = norm(xerr, 2) # Eq. 4.11
-    newdt = min(maxstep, tdir*dt*max(facmin, fac*(1/err)^(1/(order+1)))) # Eq 4.13 modified
-    if timeout>0
-        newdt = min(newdt, dt)
-        timeout -= 1
-    end
-    return err, tdir*newdt, timeout
 end
 
 function rk_embedded_step!{N,S}(ytrial, yerr, ks, ytmp, y, fn, t, dt, dof, btab::TableauRKExplicit{N,S})
@@ -500,6 +445,60 @@ function rk_embedded_step!{N,S}(ytrial, yerr, ks, ytmp, y, fn, t, dt, dof, btab:
         yerr[d]   = dt * (ytrial[d]-yerr[d])
         ytrial[d] = y[d] + dt * ytrial[d]
     end
+end
+
+function stepsize_hw92!(dt, tdir, x0, xtrial, xerr, order,
+                       timeout, dof, abstol, reltol, maxstep)
+    # Estimates the error and a new step size following Hairer &
+    # Wanner 1992, p167 (with some modifications)
+    #
+    # If timeout>0 no step size increase is allowed, timeout is
+    # decremented in here.
+    #
+    # Returns the error, newdt and the number of timeout-steps
+    #
+    # TODO:
+    # - allow component-wise reltol and abstol?
+    # - allow other norms
+
+    # Needed interface:
+    # On components: isoutofdomain, norm
+    # On y0 container: norm, get/setindex
+
+    timout_after_nan = 5
+    fac = [0.8, 0.9, 0.25^(1/(order+1)), 0.38^(1/(order+1))][1]
+    facmax = 5.0 # maximal step size increase. 1.5-5
+    facmin = 1./facmax  # maximal step size decrease. ?
+
+    # in-place calculate xerr./tol
+    for d=1:dof
+        # if outside of domain (usually NaN) then make step size smaller by maximum
+        isoutofdomain(xtrial[d]) && return 10., dt*facmin, timout_after_nan
+        xerr[d] = xerr[d]/(abstol + max(norm(x0[d]), norm(xtrial[d]))*reltol) # Eq 4.10
+    end
+    err = norm(xerr, 2) # Eq. 4.11
+    newdt = min(maxstep, tdir*dt*max(facmin, fac*(1/err)^(1/(order+1)))) # Eq 4.13 modified
+    if timeout>0
+        newdt = min(newdt, dt)
+        timeout -= 1
+    end
+    return err, tdir*newdt, timeout
+end
+
+function calc_next_k!{Ty}(ks::Vector, ytmp::Ty, y, s, fn, t, dt, dof, btab)
+    # Calculates the next ks and puts it into ks[s]
+    # - ks and ytmp are modified inside this function.
+
+    # Needed interface:
+    # On components: +, *
+    # On y0 container: setindex!, getindex, fn
+
+    ytmp[:] = y
+    for ss=1:s-1, d=1:dof
+        ytmp[d] += dt * ks[ss][d] * btab.a[s,ss]
+    end
+    ks[s] = fn(t + btab.c[s]*dt, ytmp)::Ty
+    nothing
 end
 
 # Helper functions:
@@ -536,34 +535,8 @@ function hermite_interp!(y, tquery,t,dt,y0,y1,f0,f1)
     nothing
 end
 function hermite_interp(tquery,t,dt,y0,y1,f0,f1)
-    # Returns the y
+    # Returns the y instead of in-place
     y = similar(y0)
     hermite_interp!(y,tquery,t,dt,y0,y1,f0,f1)
     return y
-end
-
-function hinit(F, x0::AbstractVector, t0, tend, p, reltol, abstol)
-    tdir = sign(tend-t0)
-    tdir==0 && error("Zero time span")
-    tau = max(reltol*norm(x0, Inf), abstol)
-    d0 = norm(x0, Inf)/tau
-    f0 = F(t0, x0)
-    d1 = norm(f0, Inf)/tau
-    if d0 < 1e-5 || d1 < 1e-5
-        h0 = 1e-6
-    else
-        h0 = 0.01*(d0/d1)
-    end
-    # perform Euler step
-    x1 = x0 + tdir*h0*f0
-    f1 = F(t0 + tdir*h0, x1)
-    # estimate second derivative
-    d2 = norm(f1 - f0, Inf)/(tau*h0)
-    if max(d1, d2) <= 1e-15
-        h1 = max(1e-6, 1e-3*h0)
-    else
-        pow = -(2. + log10(max(d1, d2)))/(p + 1.)
-        h1 = 10.^pow
-    end
-    return tdir*min(100*h0, h1), tdir, f0
 end
