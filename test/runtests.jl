@@ -58,7 +58,8 @@ for solver in solvers
     # y = [v, w]
     t,y=solver((t,y)->[-y[2]; y[1]], [1., 2.], [0:.001:2*pi;])
     # convert Vector{Vector{Float}} to Matrix{Float}
-    ys = eltype(y)<:Vector ?  hcat(y...) : y
+    ys = hcat(y...)
+    println( maximum(abs(ys-[cos(t)-2*sin(t) 2*cos(t)+sin(t)].')))
     @test maximum(abs(ys-[cos(t)-2*sin(t) 2*cos(t)+sin(t)].')) < tol
 end
 
