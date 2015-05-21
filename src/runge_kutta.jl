@@ -1,5 +1,7 @@
 using Compat
 
+# isoutofdomain takes the state and returns true if state is outside
+# of the allowed domain.
 isoutofdomain(x) = isnan(x)
 
 function make_consistent_types(fn, y0, tspan, btab)

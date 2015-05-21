@@ -30,7 +30,7 @@ Base.norm(y::CompSol) = norm(y::CompSol, 2.0)
 ### new for PR #68
 Base.abs(y::CompSol) = norm(y, 2.) # TODO not needed anymore once https://github.com/JuliaLang/julia/pull/11043 is in current stable julia
 Base.zero(::Type{CompSol}) = CompSol(complex(zeros(2,2)), 0., 0.)
-ODE.isoutofdomain(y::CompSol) = any(isnan, [y.rho[:], y.x, y.p])
+ODE.isoutofdomain(y::CompSol) = any(isnan, vcat(y.rho[:], y.x, y.p))
 
 # Because the new RK solvers wrap scalars in an array and because of
 # https://github.com/JuliaLang/julia/issues/11053 these are also needed:
