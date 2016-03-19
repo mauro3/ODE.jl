@@ -1,0 +1,448 @@
+#+TITLE: Ideas for the future of ODE.jl
+#+LATEX_HEADER: \usepackage{enumitem}
+#+LATEX_HEADER: \setlist{nolistsep}
+#+LATEX_HEADER: \makeatletter
+#+LATEX_HEADER: \renewcommand\@seccntformat[1]{}
+#+LATEX_HEADER: \makeatother
+#+LATEX_HEADER: \usepackage{amsmath}
+#+LATEX_HEADER: \hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue,}
+#+AUTHOR: Mauro Werder, 2016-03-02
+#+DATE:
+# TODO: method <-> solver
+
+Here a few of my ideas on how to take [[https://github.com/JuliaLang/ODE.jl][ODE.jl]] forward with the aim to
+turn it into a production-quality package of solvers for ordinary
+differential equation (ODE) and differential algebraic equation (DAE).
+This entails making ODE.jl correct, stable, and fast for a wide range
+of serial problems, ranging from space-discretised partial
+differential equations to systems which are encoded by custom types
+implementing their own algebra.
+
+I think the improvements need to focus on the following areas:
+
+1) API specification (user-facing and internal) and refactoring of the
+   code to match it
+2) documentation
+3) adding new solvers
+4) tight integration with a benchmarking and testing framework
+   (e.g. [[https://github.com/mauro3/IVPTestSuite.jl][IVPTestSuite.jl]] or similar)
+
+In particular the following concrete features are desired and needed:
+- new/more implicit and explicit solvers (Confusingly, there are
+  implicit and explicit solvers and also implicitly and explicitly
+  defined differential equations.)
+- dense output
+- event handling/root finding
+- status reporting and logging of convergence, time step, location of biggest error
+# - works efficiently for both general datatypes and floating point arrays
+# - interruptible by signal
+#   https://github.com/JuliaLang/julia/issues/14675,
+#   https://github.com/JuliaLang/julia/pull/14032
+
+Future work, not considered here, should also focus on:
+- sensitivity analysis
+- parallel solvers
+
+* 1) API
+
+** User-interface API
+
+A ODE or DAE problem (this mirrors the API of the TS
+ module of PETSc, see [[http://www.mcs.anl.gov/petsc/petsc-current/docs/manual.pdf][PETSc manual]] page 131) can be defined as
+
+\begin{equation}
+F(t, y, \dot{y}) = G(t, y), \quad y(t_0)= y_0
+\label{eq:full}
+\end{equation}
+
+if $\frac{\partial F}{\partial \dot{y}}$ is nonsingular then above
+equation corresponds to a ODE, if singular then to a DAE.  If it is an
+ODE it could in principle be transformed to the standard explicit form
+$\dot{y}=G(t,y)$ (however, solving for $\dot{y}$ is often
+impractical).  Some ODE/DAE solvers may only work with problems where
+$F$ or $G$ have a special form, for instance $\dot{y}=G$ for
+explicit-form solvers.
+
+
+*High-level user interface:* This is an extension of the API laid out
+in [[https://github.com/JuliaLang/ODE.jl/blob/master/doc/api.md][ODE.jl API]] (which is the API many high-level ODE libraries
+implement, such as SciPy or Matlab).  The ease-of-use is traded for a
+slightly limited feature-set compared to the lower-level API.
+
+I envisage the following three ways to call the solvers.  For
+explicitly defined ODEs (i.e. for specifying a system
+$\dot{y}=G(t,y)$), the currently implemented API should stay
+#+BEGIN_SRC julia
+tout, yout = odeXX(G, y0, tspan; keywords...)
+#+END_SRC
+where ~XX~ corresponds to a particular solver, e.g. ~ode45~.
+
+For implicitly defined systems (i.e. $F(t,y,\dot{y})=0$ or
+$F(t,y,\dot{y})=G(t,y)$) the API could be
+#+BEGIN_SRC julia
+tout, yout = iodeXX(F, G, y0, tspan; keywords...)
+#+END_SRC
+again, where ~XX~ corresponds to a particular solver.  This API is
+similar to the one used by [[https://github.com/pwl/DASSL.jl][DASSL.jl]] and [[https://github.com/JuliaLang/Sundials.jl][Sundials.jl]].
+
+The following function will allow calling a solver without hard coding
+the solver with the function name
+#+BEGIN_SRC julia
+tout, yout = ode(method, F, G, y0, tspan; keywords...)
+#+END_SRC
+where the variable ~method~ (probably either a symbol or a
+type-instance encoding the method) selects the used method.  Depending
+on the method either an explicit function ~G~ or implicit function ~F~
+or both need to be specified.
+
+Aside: The underlying low-level API will be based around in-place ~G!~
+and ~F!~.  I am not sure (yet) whether or how to support this in the
+high-level API.
+
+Solver parameters are specified through ~keywords~ arguments.
+However, at least for some solvers, not all of their options may be
+available.  Most of these options are already supported, some are new:
+- ~abstol, reltol~: error control
+- ~norm~ user supplied norm function used in the error estimation
+- step control: ~maxstep, minstep, initstep~
+- ~maxorder~: set or limit the order of variable order methods
+- ~status~: a function called after each step
+- ~verbosity~: how much solver status feedback is given
+- output points: ~points~ (I am unsure about the best interface here)
+- ~jacobian~: Jacobian function or sparsity structure
+- ~eventfn~: event detection/root finding function(s)
+- ~mass~: a function which returns the mass matrix.  (Not sure whether/how
+  to include this as this can be encoded with the $F(t, y, \dot{y}) =
+  G(t, y)$ formalism)
+
+*Lower-level user interface:* This API will allow to access all solver
+features and at maximum performance (the high-level API wraps this).
+The API to solve eq.(1) is based around iteration (as advanced in [[https://github.com/JuliaLang/ODE.jl/pull/49][PR
+#49 by @pwl]]), best shown as an example, in Julia-psuedo code:
+#+BEGIN_SRC julia
+  # Equations to be solved
+  F!(res, t, y, ydot) = ...
+  G!(res, t, y) = ...
+  y0 = ...   # initial conditions
+  tspan = [start_time, end_time]  # integration time interval
+  tout = linspace(tspan[1], tspan[2], 100)  # output times, tout ∈ tspan
+
+  # Solver setup
+  eventfns = [f1, f2] # of form f1(t,y,ydot)
+  meth = method(:rk45) # returns a type-instance encoding Runge-Kutta 45
+  opts = options(meth; eventfns=eventfns, other_non_default_kws...) # create option structure
+  problem = Problem(F!, G!, y0, tspan, opts) # defines a ODE/DAE problem
+
+  # Iterating over the actual steps the solver takes:
+  yout, tout, events = [], [], []
+  for state in problem
+      t,y,ydot = current(state)
+      push!(yout, y)
+      push!(tout, t)
+      e = getevents!(state) # sets state.done if event is terminal
+      append!(events, e)
+  end
+
+  # Iterating over the given output times tout (this is just a wrapper of above iterator)
+  yout, events = [], []
+  for (t,y,ydot,e) in denseoutput(problem, tout, points=:specified)
+      push!(yout, y)
+      append!(events, e) # e: list of events which happend since previous output time
+  end
+#+END_SRC
+
+In the first loop, the iteration returns the time-steps actually taken
+by the stepper, be it an adaptive time/order solver, or a fixed step
+solver.  The function ~getevents~ detects any events that happened
+during the last step and terminates the iteration if one of the events
+requests it.  The variable ~state~ holds all the necessary information
+to take the next step as well as all the information to do dense
+output.  Solvers for a set of ODE/DAE-methods have to define a type to
+hold the ~state~; the topic of the next section.
+
+
+The iteration using ~denseoutput~ outputs the ~y~, ~ydot~ at the times
+specified in ~tout~, however, underneath the same steps as in the
+first loop are taken.  If ~points=:all~ is set, then additionally the
+actual steps are also output
+
+
+
+** Internal API
+
+The aim of below-proposed design of the internal API is to make adding
+new integration methods as easy as possible: meaning that for most
+methods it should suffice to add a method to advance one time step
+(plus some helper methods and types).  The adaptive time/order
+stepping, error control, dense output (to 3rd order), and event
+location will be provided by ODE.jl.  If a method does not fit into
+this scheme then it can directly implement the lower-level,
+user-facing API (see previous section) and still be a "full member" of
+ODE.jl.
+
+The API, which makes implementing new solvers easy, together with the
+envisaged tight integration for running benchmark & test cases (see
+below), will hopefully make ODE.jl an attractive environment for
+ODE/DAE solver development.
+
+The internal API in Julia pseudo code (extending [[https://github.com/JuliaLang/ODE.jl/pull/49][PR #49 of @pwl]]):
+#+BEGIN_SRC julia
+  # Integration methods (aka solvers) are subtypes of:
+  abstract IntegrationMethod
+
+  # Integration methods options/settings
+  abstract AOptions
+  # universal options:
+  type Options <: AOptions
+      abstol; reltol; norm; # etc: all the keyword arguments and some more
+      ...
+      # Method specific option structure:
+      specific_opts::AOptions
+  end
+
+
+  # Type holding the mathematical definition of the problem
+  immutable ODEdef
+      F!; G! # the differential equation: F(t, y, ydot) = G(t, y)
+             # with F!(t,y,ydot,res), G!(t,y,res)
+      y0 # initial conditions
+      t0 # initial time
+  end
+
+  # Combine this definition with an integration method and with an
+  # end-time to create a the full problem specification
+  immutable Problem
+      ode::ODEdef
+      eventfns # list of event functions: find the zeros of these
+      method::IntegrationMethod
+      opts::AOptions     # numerical options for that method
+      tend    # end time
+  end
+  # wrap above type for dense output
+  immutable DenseProblem
+      problem::Problem
+      tout # requested output times
+  end
+
+  # Abstract super-type for ODE-state types
+  abstract AState
+
+  # Iterator setup to allow lower-level user-API loops:
+  function start(p::Problem)
+      # Does various setups
+      ...
+      return state::AState
+  end
+  function timestep!(state::AState, F!, G!, opts) # -> status-code: success or failure
+      # Does one time step:
+      # - takes a step with `step!` which is integration-method specific
+      # - checks its error and accepts or rejects the step.  Sets the
+      #   step-size and order for the next step.
+      # - if it is a fixed step solver, just accept all steps
+      while true
+          step!(state, F!, G!, tend, opts) # sets state.done if done
+          accept = stepcontrol!(state) # sets new state.dt, state.order
+          if accept
+              state.status = SUCESS
+              break
+          elseif too_many_steps_etc
+              state.status = FAILURE
+              state.done = true
+              break
+          else
+              # try again with new step size and/or order
+              rollback!(state)
+          end
+      end
+      return state.status
+  end
+
+  next(p::Problem, state::AState) = (timestep!(state, p.F!, p.G!, p.opts); (state,state) )
+  done(p::Problem, state::AState) = state.done
+
+  # Dense output using state
+  denseoutput(state, tout) = (...; return ts, ys)
+
+  # Dense output iterator
+  denseoutput(p::Problem, tout) = DenseOutput(p, tout)
+  start(d::DenseOutput) = (1,start(d.problem)) # first is index into tout
+  function next(d::DenseOutput, st::Tuple{Int,AState})
+      ind, state = st
+      if new_state_needed
+          state = next(d.problem, state)
+          events = getevents(state)
+      end
+      t,y,ydot,e = get_dense_output(state, events, tout[ind], ...)
+      return ( (t,y,ydot,e), (ind+1, state) )
+  end
+  done(d::DenseOutput, st::Tuple{Int,AState}) = ...
+#+END_SRC
+
+
+To make above machinery work each integration-method, or group of
+methods, needs to implement below interface.  Basically it consists of
+a type to hold the ~state~ and implementing methods to do one
+time-step and to provide dense output (if higher than 3-order dense
+output is required).  Again in Julia pseudo code:
+#+BEGIN_SRC julia
+  type OptionsXX <: AOptions
+      # method specific options/parameters
+  end
+
+  type StateXX <: AState
+      # Holds the state for a particular set of integration methods,
+      # i.e. all info necessary to:
+      # - take the next step
+      # - create dense output between current and last step (if supported)
+      # - this also includes necessary temporary storage
+      #
+      # There are various subtleties, e.g. with multistep solver during
+      # startup.
+      #
+      # The constructor creates `state` for the initial conditions, e.g.:
+      y; t;
+      y_previous; t_previous;
+      ...
+      StateXX(...) = ...
+  end
+  # + some helper functions
+  current(state::StateXX) = ...  # return t, y(t), ydot(t)
+  currenttime(state::StateXX) = ...  # return t
+  previous(state::StateXX) = ... # return t-1, y(t-1), ydot(t-1)
+  # etc
+
+  function step!(state::StateXX, F!, G!,  tend, opts)
+      # This function takes one time step.  This is the core function of
+      # a solver-method.
+  end
+  function rollback!(state::StateXX, tend, opts)
+      # Undoes the last time step, needed if it gets rejected.
+  end
+  function denseoutput(state::StateXX, tout)
+      # Provides interpolated output at the times specified in tout.
+      # ( t_last< tout <= t_current ).
+      #
+      # If not specifed, then it uses a 3rd-order fallback using Hermite interpolation.
+  end
+  function getevents(state::StateXX)
+      # Returns events in last timestep. Sets state.done if terminal event.
+      #
+      # If not specifed, falls back to find roots using the denseoutput method.
+  end
+#+END_SRC
+
+This concludes the overview of the envisaged user-facing and internal
+API.  Certainly, the design should/would evolve during an
+implementation as design constraints from newly implemented solvers
+become apparent, as well as mistakes in this design.
+
+*** Hooking up external ODE solvers
+
+There are several other Julia ODE/DAE solver packages: [[https://github.com/pwl/DASSL.jl][DASSL.jl]],
+[[https://github.com/JuliaLang/Sundials.jl][Sundials.jl]], [[https://github.com/luchr/ODEInterface.jl][ODEInterface.jl]], [[https://github.com/helgee/Dopri.jl][Dopri.jl]] and in future probably
+[[https://github.com/JuliaParallel/PETSc.jl/issues/60][PETSc.jl]].  It should be straight forward to wrap solvers which have an
+interface based around iteration (DASSL.jl, Sundials.jl, PETSc.jl).
+However, wrapping packages which do not provide iterators may not be
+possible to the full extent and thus may not be worthwhile to wrap.
+
+*** External packages for solving non-linear equations (used by implicit solvers)
+
+Systems of (non-)linear equations need to be solved when using
+implicit solvers:
+
+\begin{equation}
+H(x) = 0.
+\end{equation}
+
+Often this is implemented with a Newton method (but there are also
+other methods) which involves repeatedly solving a system of linear
+equations
+
+\begin{equation}
+J(x_k) \Delta x_k = −H (x_k),
+\end{equation}
+
+for $\Delta x_k$ which is then used to update the solution estimate
+$x_{k+1}=x_k + \Delta x$.  $J$ is the Jacobian $J=H'$.
+
+Ideally ODE.jl would use an external package for solving non-linear
+equations.  As far as I can tell [[https://github.com/EconForge/NLsolve.jl][NLsolve.jl]] is the most advanced
+package for this, providing automatic computations of Jacobians (by
+finite differences or automatic differentiation).  However, for large
+and sparse Jacobians, matrix-coloring provides a big speed boost by
+lowering the amount of function evaluations.  I started implementing
+such a package ([[https://github.com/mauro3/MatrixColorings.jl][MatrixColorings.jl]] used in Rosenrock-W methods [[https://github.com/JuliaLang/ODE.jl/pull/72][PR
+#72]]), which ideally would be integrated with NLsolve.jl.
+
+I suggest that ODE.jl should have a simple Newton-based non-linear
+solver built-in.  However, it should also allow using the more
+advanced solvers of NLsolve.jl or other packages.
+
+*** Linear solvers
+
+Currently, the focus of ODE.jl is on serial problems, i.e. on systems
+with up to a few 10,000 degrees of freedom.  Therefore, only
+Julia-Base direct linear solvers, i.e. the ~\~-operator, are
+considered at the moment (to be used inside the Newton-solver).
+However, for large-scale systems iterative solvers
+(e.g. [[https://github.com/JuliaLang/IterativeSolvers.jl][IterativeSolvers.jl]]) would be better suited and should be made
+available in the future, in particular if parallel capabilities are
+added to ODE.jl.
+
+* 2) Documentation
+
+Simple yet effective documentation should be provided, probably hosted
+on [[https://readthedocs.org/][Read the Docs]].  API documentation can derived from in-line
+doc-strings (which also need writing), the manual will probably best
+be written in markdown.  Examples may be provided as markdown
+documents or Jypter notebooks (e.g. [[https://github.com/JuliaLang/ODE.jl/pull/87][PR #87]]), a uniform format has to
+be decided on.
+
+* 3) New solvers
+
+For non-stiff ODEs, there are quite a few explicit solvers in ODE.jl,
+in particular a suite of adaptive Runge-Kutta methods (but explicit
+adaptive multistep methods are missing).  However, for stiff
+ODEs there is only one implicit, adaptive solver: ~ode23s~.  Focus for
+new solvers should therefore be on providing more implicit solvers.
+In particular the following:
+- finish up [[https://github.com/JuliaLang/ODE.jl/pull/72][PR 72]] for Rosenrock-W methods
+- IMEX (implicit-explicit) methods
+- multistep solvers: explicit & implicit (Adams-Bashforth, BDF which
+  is implemented in DASSL.jl)
+- implicit Runge-Kutta methods
+- Structure preserving methods, e.g. symplectic solvers (see [[https://github.com/JuliaLang/ODE.jl/pull/10][PR 10]])
+
+* 4) Tight integration with benchmark/test suite
+
+When developing an ODE solver, tests for both correctness and
+performance are indispensable.  [[https://github.com/mauro3/IVPTestSuite.jl][IVPTestSuite.jl]] is such a package,
+albeit in need of some attention, but it should make a good
+foundation.  Ideally such test/benchmarks would be run
+(semi-)automatically during continuous integration and produce
+reports.  [[https://github.com/JuliaCI/BenchmarkTrackers.jl][BenchmarkTrackers.jl]] provides such a frame-work and
+hopefully IVPTestSuite.jl can hook into it.
+
+* References
+
+
+Hairer, E.; Nørsett, S. P. & Wanner, G. 3nd (Ed.) Solving ordinary
+differential equations I: nonstiff problems; Springer-Verlag, 1992
+
+Wanner, G. & Hairer, E. 2nd (Ed.) Solving Ordinary Differential
+Equations II: Stiff and Differential-Algebraic Problems;
+Springer-Verlag, 1996
+
+Hairer, E.; Lubich, C. & Wanner, G. Geometric numerical integration:
+structure-preserving algorithms for ordinary differential equations;
+Springer Science & Business Media, 2004, 31
+
+Butcher, J. C. 2nd (Ed.) Numerical methods for ordinary differential
+equations; John Wiley & Sons, 2008 (less accessible than above)
+
+S. Balay et al., PETSc Users Manual, Revision 3.6, 2015
+http://www.mcs.anl.gov/petsc/petsc-current/docs/manual.pdf
+
+[[https://computation.llnl.gov/casc/sundials/documentation/documentation.html][Sundials Documentation]]
+
+[[http://math.lanl.gov/~shenli/publications/daspk_doc.pdf][Sensitivity analysis: DASPK-solver]]
